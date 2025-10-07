@@ -1,0 +1,39 @@
+# CESAROPS Configuration File
+# Great Lakes data sources
+data_sources:
+  gl_erie: "https://coastwatch.glerl.noaa.gov/erddap/griddap/glsea_erie_3d"
+  gl_huron: "https://coastwatch.glerl.noaa.gov/erddap/griddap/glsea_huron_3d"
+  gl_michigan: "https://coastwatch.glerl.noaa.gov/erddap/griddap/glsea_michigan_3d"
+  gl_ontario: "https://coastwatch.glerl.noaa.gov/erddap/griddap/glsea_ontario_3d"
+  gl_superior: "https://coastwatch.glerl.noaa.gov/erddap/griddap/glsea_superior_3d"
+  gl_all: "https://coastwatch.glerl.noaa.gov/erddap/griddap/glsea_all_3d"
+  rtofs: "https://coastwatch.pfeg.noaa.gov/erddap/griddap/ncepRtofsG2DFore3hrlyProg"
+  hycom: "https://tds.hycom.org/erddap/griddap/hycom_glby_930"
+
+# Great Lakes bounding boxes [min_lon, max_lon, min_lat, max_lat]
+great_lakes_bbox:
+  erie: [-83.7, -78.8, 41.2, 42.9]
+  huron: [-85.0, -80.5, 43.2, 46.3]
+  michigan: [-88.5, -85.5, 41.5, 46.0]
+  ontario: [-80.0, -76.0, 43.2, 44.3]
+  superior: [-92.5, -84.5, 46.0, 49.5]
+  all: [-92.5, -76.0, 41.2, 49.5]
+
+# Drift simulation defaults
+drift_defaults:
+  dt_minutes: 10
+  duration_hours: 24
+  windage: 0.03
+  stokes: 0.01
+
+# Particle seeding defaults
+seeding:
+  default_radius_nm: 2.0
+  default_rate: 60
+
+# Directory structure
+directories:
+  data: "data"
+  outputs: "outputs"
+  models: "models"
+  logs: "logs"
