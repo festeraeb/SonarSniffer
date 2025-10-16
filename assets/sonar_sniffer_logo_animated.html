@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SonarSniffer Animated Logo</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
+            text-align: center;
+        }
+        .logo-container {
+            display: inline-block;
+            padding: 30px;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin: 20px;
+        }
+        .logo-svg {
+            width: 400px;
+            height: 200px;
+            margin-bottom: 15px;
+        }
+        .logo-text {
+            font-size: 28px;
+            font-weight: bold;
+            color: #007cba;
+            margin: 0;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        .tagline {
+            font-size: 14px;
+            color: #666;
+            margin: 8px 0 0 0;
+            font-style: italic;
+        }
+        .description {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .description h3 {
+            color: #007cba;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="logo-container">
+        <!-- Animated SonarSniffer Logo with Vizsla Silhouette -->
+        <svg class="logo-svg" viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <!-- Sonar wave animation -->
+                <style>
+                    @keyframes sonarPulse {
+                        0% {
+                            opacity: 0.8;
+                            transform: scale(0.3);
+                        }
+                        50% {
+                            opacity: 0.4;
+                            transform: scale(0.8);
+                        }
+                        100% {
+                            opacity: 0;
+                            transform: scale(1.5);
+                        }
+                    }
+
+                    .sonar-wave {
+                        animation: sonarPulse 2s infinite ease-out;
+                        transform-origin: center;
+                    }
+
+                    .sonar-wave:nth-child(1) { animation-delay: 0s; }
+                    .sonar-wave:nth-child(2) { animation-delay: 0.5s; }
+                    .sonar-wave:nth-child(3) { animation-delay: 1s; }
+                    .sonar-wave:nth-child(4) { animation-delay: 1.5s; }
+                </style>
+            </defs>
+
+            <!-- Background sonar waves emanating from nose -->
+            <g transform="translate(75, 75)">
+                <!-- Wave 1 -->
+                <circle cx="0" cy="-15" r="8" fill="none" stroke="#007cba" stroke-width="1" class="sonar-wave" opacity="0"/>
+                <!-- Wave 2 -->
+                <circle cx="0" cy="-15" r="12" fill="none" stroke="#007cba" stroke-width="1" class="sonar-wave" opacity="0"/>
+                <!-- Wave 3 -->
+                <circle cx="0" cy="-15" r="18" fill="none" stroke="#007cba" stroke-width="1" class="sonar-wave" opacity="0"/>
+                <!-- Wave 4 -->
+                <circle cx="0" cy="-15" r="25" fill="none" stroke="#007cba" stroke-width="1" class="sonar-wave" opacity="0"/>
+            </g>
+
+            <!-- Vizsla silhouette (pointed nose forward) -->
+            <g transform="translate(75, 75)">
+                <!-- Vizsla body (sleeker, more athletic) -->
+                <ellipse cx="0" cy="8" rx="22" ry="12" fill="#8B4513"/>
+                <!-- Vizsla head (more refined, pointed muzzle) -->
+                <ellipse cx="-18" cy="-2" rx="14" ry="10" fill="#8B4513"/>
+                <!-- Vizsla ears (floppy, characteristic of vizsla) -->
+                <ellipse cx="-22" cy="-10" rx="4" ry="8" fill="#654321"/>
+                <ellipse cx="-14" cy="-10" rx="4" ry="8" fill="#654321"/>
+                <!-- Vizsla nose (prominent, pointed) -->
+                <ellipse cx="-28" cy="0" rx="2.5" ry="1.5" fill="#000"/>
+                <!-- Vizsla eyes -->
+                <circle cx="-16" cy="-6" r="1.8" fill="#000"/>
+                <!-- Vizsla tail (curved, docked) -->
+                <path d="M 18 2 Q 25 -3 22 0" stroke="#8B4513" stroke-width="3" fill="none"/>
+                <!-- Vizsla legs (sleek) -->
+                <rect x="-12" y="18" width="2.5" height="10" fill="#654321"/>
+                <rect x="-4" y="18" width="2.5" height="10" fill="#654321"/>
+                <rect x="4" y="18" width="2.5" height="10" fill="#654321"/>
+                <rect x="12" y="18" width="2.5" height="10" fill="#654321"/>
+            </g>
+
+            <!-- Branding text -->
+            <text x="120" y="50" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#007cba">SonarSniffer</text>
+            <text x="120" y="70" font-family="Arial, sans-serif" font-size="10" fill="#666">by NautiDog Inc.</text>
+        </svg>
+
+        <h1 class="logo-text">SonarSniffer</h1>
+        <p class="tagline">Professional Marine Survey Solutions</p>
+    </div>
+
+    <div class="description">
+        <h3>🐕 Meet Our Mascot: The Vizsla</h3>
+        <p>The Vizsla is a sleek, athletic hunting dog breed known for its keen senses and tracking abilities - perfect for representing advanced sonar detection technology!</p>
+
+        <h3>🌊 Animated Sonar Waves</h3>
+        <p>Watch the sonar waves pulse outward from the dog's nose, symbolizing the detection and ranging capabilities of our marine survey tools.</p>
+
+        <h3>🎨 Professional Design</h3>
+        <p>CSS-animated SVG ensures crisp, scalable graphics that work beautifully across all devices and screen sizes.</p>
+    </div>
+</body>
+</html></content>
+<parameter name="filePath">c:\Temp\HummSucker\Garmin-Rsd\sonar_sniffer_logo_animated.html

@@ -1,0 +1,14 @@
+include README.md
+include LICENSE
+include CHANGELOG.md
+include requirements.txt
+include install_windows.bat
+include install_macos.sh
+recursive-include samples *.RSD *.SON *.XTF
+recursive-include web *.html *.css *.js
+recursive-include assets *.svg *.png *.jpg *.ico
+recursive-include docs *.md
+exclude src/sonarsniffer/license_key_generator.py
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .git*

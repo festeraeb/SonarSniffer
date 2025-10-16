@@ -1,0 +1,1 @@
+ofs,channel_id,seq,time_ms,lat,lon,depth_m,sample_cnt,sonar_ofs,sonar_size,beam_deg,pitch_deg,roll_deg,heave_m,tx_ofs_m,rx_ofs_m,color_id,frequency,temperature,water_speed,gain,pulse_power,range_setting,extras_json

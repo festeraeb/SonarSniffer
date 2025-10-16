@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sonarsniffer"
+version = "1.0.0-beta"
+description = "Professional marine survey analysis software with AI-enhanced target detection"
+readme = "docs/README.md"
+license = {text = "Proprietary"}
+requires-python = ">=3.8"
+authors = [
+    {name = "NautiDog Inc.", email = "festeraeb@yahoo.com"},
+]
+maintainers = [
+    {name = "NautiDog Inc.", email = "festeraeb@yahoo.com"},
+]
+keywords = [
+    "sonar",
+    "marine",
+    "survey",
+    "analysis",
+    "target",
+    "detection",
+    "bathymetry",
+    "hydrographic",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: End Users/Desktop",
+    "License :: Other/Proprietary License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+dependencies = [
+    "numpy>=1.21.0",
+    "matplotlib>=3.5.0",
+    "pillow>=8.0.0",
+    "requests>=2.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov",
+    "black",
+    "flake8",
+    "mypy",
+]
+web = [
+    "flask>=2.0",
+    "flask-cors",
+]
+ai = [
+    "tensorflow>=2.8",
+    "scikit-learn>=1.0",
+]
+
+[project.scripts]
+sonarsniffer = "sonarsniffer.cli:main"
+sonar-web = "sonarsniffer.web.app:main"
+
+[project.urls]
+Homepage = "https://github.com/festeraeb/SonarSniffer"
+Repository = "https://github.com/festeraeb/SonarSniffer"
+Issues = "https://github.com/festeraeb/SonarSniffer/issues"
+Documentation = "https://github.com/festeraeb/SonarSniffer/wiki"
+
+[tool.setuptools]
+zip-safe = false
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sonarsniffer = ["*.txt", "*.md", "*.html", "*.css", "*.js", "*.svg", "*.png"]
