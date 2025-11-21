@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-SonarSniffer GUI - Desktop application for RSD file processing
-Provides intuitive file selection, real-time progress, and detailed results
+SonarSniffer GUI - Desktop application for sonar data processing
+SonarSniffer by NautiDog Sailing
+Sniffing out sonar targets like a vizsla on birds
 """
 
 import tkinter as tk
@@ -391,7 +392,7 @@ def build_single_frame(frame_data):
 class SonarGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("SonarSniffer - RSD File Processor")
+        self.root.title("SonarSniffer - Sonar Data Processor")
         self.root.geometry("1400x900")
         
         # Configure style
@@ -572,12 +573,16 @@ class SonarGUI:
         main_frame = padded_main
         
         # Title
-        title = ttk.Label(main_frame, text="🎯 SonarSniffer RSD Processor", style='Title.TLabel')
-        title.grid(row=0, column=0, columnspan=4, sticky='w', pady=(0, 15))
+        title = ttk.Label(main_frame, text="🐕 SonarSniffer", style='Title.TLabel')
+        title.grid(row=0, column=0, columnspan=4, sticky='w', pady=(0, 5))
+        
+        # Tagline
+        tagline = ttk.Label(main_frame, text="Sniffing out sonar targets like a vizsla on birds", style='Subtitle.TLabel', foreground='#666666')
+        tagline.grid(row=1, column=0, columnspan=4, sticky='w', pady=(0, 15))
         
         # File selection panel
         file_frame = ttk.LabelFrame(main_frame, text="📁 File Selection", padding="10")
-        file_frame.grid(row=1, column=0, columnspan=4, sticky='ew', pady=(0, 10))
+        file_frame.grid(row=2, column=0, columnspan=4, sticky='ew', pady=(0, 10))
         file_frame.columnconfigure(1, weight=1)
         
         ttk.Label(file_frame, text="Selected File:", style='Header.TLabel').grid(row=0, column=0, sticky='w')
