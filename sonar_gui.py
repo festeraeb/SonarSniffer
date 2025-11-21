@@ -607,7 +607,7 @@ class SonarGUI:
         
         # Processing options panel
         options_frame = ttk.LabelFrame(main_frame, text="⚙️ Processing Options", padding="10")
-        options_frame.grid(row=3, column=0, columnspan=4, sticky='ew', pady=(0, 10))
+        options_frame.grid(row=4, column=0, columnspan=4, sticky='ew', pady=(0, 10))
         options_frame.columnconfigure(4, weight=1)
         
         # Row 1: Color scheme and video/waterfall options
@@ -648,7 +648,7 @@ class SonarGUI:
         
         # Progress panel
         progress_frame = ttk.LabelFrame(main_frame, text="⏳ Processing Progress", padding="10")
-        progress_frame.grid(row=4, column=0, columnspan=4, sticky='nsew', pady=(0, 10))
+        progress_frame.grid(row=5, column=0, columnspan=4, sticky='nsew', pady=(0, 10))
         progress_frame.columnconfigure(1, weight=1)
         progress_frame.rowconfigure(2, weight=1)
         
@@ -672,7 +672,7 @@ class SonarGUI:
         
         # Results panel with scrolled text
         results_frame = ttk.LabelFrame(main_frame, text="📊 Results & Output", padding="10")
-        results_frame.grid(row=5, column=0, columnspan=4, sticky='nsew')
+        results_frame.grid(row=6, column=0, columnspan=4, sticky='nsew')
         results_frame.columnconfigure(0, weight=1)
         results_frame.rowconfigure(0, weight=1)
         
@@ -691,7 +691,7 @@ class SonarGUI:
         
         # Clear results button at bottom
         clear_frame = ttk.Frame(main_frame)
-        clear_frame.grid(row=6, column=0, columnspan=4, sticky='ew', pady=(10, 0))
+        clear_frame.grid(row=7, column=0, columnspan=4, sticky='ew', pady=(10, 0))
         clear_frame.columnconfigure(1, weight=1)
         
         ttk.Button(clear_frame, text="🗑 Clear Results", command=self.clear_results).grid(row=0, column=0, padx=5)
