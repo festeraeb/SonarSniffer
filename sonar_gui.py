@@ -406,6 +406,7 @@ class SonarGUI:
         # State variables
         self.current_file = tk.StringVar()
         self.output_dir = tk.StringVar(value=str(Path.home() / "SonarSniffer_Output"))
+        self.last_output_dir = str(Path.home() / "SonarSniffer_Output")  # Remember last used directory
         self.processing = False
         self.cancel_requested = False
         
@@ -594,7 +595,7 @@ class SonarGUI:
         
         # Output directory panel
         output_frame = ttk.LabelFrame(main_frame, text="📂 Output Directory", padding="10")
-        output_frame.grid(row=2, column=0, columnspan=4, sticky='ew', pady=(0, 10))
+        output_frame.grid(row=3, column=0, columnspan=4, sticky='ew', pady=(0, 10))
         output_frame.columnconfigure(1, weight=1)
         
         ttk.Label(output_frame, text="Output Folder:", style='Header.TLabel').grid(row=0, column=0, sticky='w')
@@ -1454,11 +1455,12 @@ Results are saved to the output directory alongside processed waterfall and vide
         """Open directory browser to select output folder"""
         directory = filedialog.askdirectory(
             title="Select Output Directory",
-            initialdir=self.output_dir.get() or str(Path.home())
+            initialdir=self.last_output_dir or str(Path.home())
         )
         
         if directory:
             self.output_dir.set(directory)
+            self.last_output_dir = directory  # Remember this directory
             self.log_info(f"✓ Output directory selected: {directory}")
     
     def clear_output_dir(self):
