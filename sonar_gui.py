@@ -3609,6 +3609,7 @@ Results are saved to the output directory alongside processed waterfall and vide
             # Add folder for data points
             data_folder = kml.newfolder(name="Data Points")
             
+            valid_points = 0
             # Add each record as a point
             for i, record in enumerate(records_data, 1):
                 lat = getattr(record, 'lat', None)
@@ -3616,13 +3617,21 @@ Results are saved to the output directory alongside processed waterfall and vide
                 depth = getattr(record, 'depth', getattr(record, 'depth_m', None))
                 ch = getattr(record, 'ch', getattr(record, 'channel_id', None))
                 
-                if lat and lon:
-                    point = data_folder.newpoint(name=f"Record {i}", coords=[(lon, lat)])
-                    point.description = f"Channel: {ch}, Depth: {depth}m"
+                # Validate GPS coordinates
+                if lat and lon and isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                    if -90 <= lat <= 90 and -180 <= lon <= 180:
+                        point = data_folder.newpoint(name=f"Record {i}", coords=[(lon, lat)])
+                        # Convert depth to feet for display
+                        depth_ft = meters_to_feet(depth) if isinstance(depth, (int, float)) else depth
+                        point.description = f"Channel: {ch}, Depth: {depth_ft:.1f} ft"
+                        valid_points += 1
+            
+            self.log_info(f"  Added {valid_points} valid GPS points to KML")
             
             # Add folder for mosaic overlays if available
             if mosaic_paths:
                 overlay_folder = kml.newfolder(name="Mosaic Overlays")
+                overlay_count = 0
                 
                 # mosaic_paths is a dict {channel: (format, path, world_path, bounds)}
                 for ch, mosaic_info in mosaic_paths.items():
@@ -3636,21 +3645,37 @@ Results are saved to the output directory alongside processed waterfall and vide
                             overlay_name = f"Channel {ch} Mosaic"
                             ground_overlay = overlay_folder.newgroundoverlay(name=overlay_name)
                             ground_overlay.icon.href = f"file:///{mosaic_path}"
+                            overlay_count += 1
                     except Exception as e:
                         self.log_warning(f"Could not add mosaic overlay for channel {ch}: {e}")
                         continue
+                
+                if overlay_count > 0:
+                    self.log_info(f"  Added {overlay_count} mosaic overlay(s)")
             
             filepath = Path(output_dir) / f"{file_stem}_trackline.kml"
-            kml.save(str(filepath))
             
-            self.log_success(f"✓ KML Trackline exported to: {filepath}")
-            self.log_info("  TIP: For bathymetric KML with depth contours, use the Post-Processing dialog")
+            # Try to save - with explicit error catching
+            try:
+                kml.save(str(filepath))
+                
+                # Verify file was created and has content
+                if filepath.exists() and filepath.stat().st_size > 0:
+                    self.log_success(f"✓ KML Trackline exported to: {filepath.name} ({filepath.stat().st_size:,} bytes)")
+                    self.log_info("  TIP: For bathymetric KML with depth contours, use the Post-Processing dialog")
+                else:
+                    self.log_error(f"KML file created but is empty or unreadable: {filepath}")
+            except Exception as save_error:
+                self.log_error(f"Failed to save KML file: {save_error}")
+                raise
             
         except ImportError:
-            self.log_error("KML export requires 'simplekml' package")
+            self.log_error("KML export requires 'simplekml' package (install with: pip install simplekml)")
         except Exception as e:
             self.log_error(f"KML export failed: {str(e)}")
+            self.log_error(f"  Records available: {len(records_data) if records_data else 0}")
             self.log_error(traceback.format_exc())
+            # Don't re-raise - allow processing to continue even if KML fails
     
     def _export_mbtiles_auto(self, records_data, mosaic_paths, output_dir, file_stem):
         """Auto-export MBTiles without file dialog"""

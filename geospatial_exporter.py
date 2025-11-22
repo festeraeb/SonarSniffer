@@ -160,7 +160,8 @@ class BathymetricProcessor:
         Create interpolated bathymetric grid using SciPy with memory limits
         
         Returns:
-            2D numpy array with depth values at regular grid points
+            2D numpy array with depth values at regular grid points,
+            or None if grid creation fails (fallback to point-cloud rendering)
         """
         if not SCIPY_AVAILABLE:
             logging.warning("SciPy not available, skipping grid interpolation")
@@ -226,8 +227,19 @@ class BathymetricProcessor:
             
             # Interpolate depths using RBF (Radial Basis Function)
             # Use thin_plate with smooth to avoid overfitting and improve memory efficiency
-            rbf = interpolate.Rbf(lons, lats, depths, function='thin_plate', smooth=0.1)
-            depth_grid = rbf(lon_mesh, lat_mesh)
+            try:
+                rbf = interpolate.Rbf(lons, lats, depths, function='thin_plate', smooth=0.1)
+                depth_grid = rbf(lon_mesh, lat_mesh)
+            except Exception as rbf_error:
+                logging.warning(f"RBF interpolation failed: {rbf_error}. "
+                              f"Falling back to linear interpolation.")
+                # Fallback to linear interpolation (much faster, less memory)
+                from scipy.interpolate import griddata
+                depth_grid = griddata((lons, lats), depths, (lon_mesh, lat_mesh), method='linear')
+                if np.all(np.isnan(depth_grid)):
+                    # If linear fails, use nearest neighbor
+                    logging.warning("Linear interpolation produced all NaN. Using nearest neighbor.")
+                    depth_grid = griddata((lons, lats), depths, (lon_mesh, lat_mesh), method='nearest')
             
             self.grid_data = {
                 'depths': depth_grid,
@@ -245,9 +257,11 @@ class BathymetricProcessor:
             logging.error(f"Memory error during grid creation: {e}. "
                         f"Survey area may be too large with current resolution. "
                         f"Try using coarser grid resolution or processing smaller areas.")
+            logging.info("Fallback: Will render point cloud instead of interpolated grid for KML/visualization")
             return None
         except Exception as e:
             logging.error(f"Grid interpolation failed: {e}")
+            logging.info("Fallback: Will render point cloud instead of interpolated grid for KML/visualization")
             return None
     
     def get_contours(self, interval: float = 1.0) -> List[List[Tuple[float, float, float]]]:
