@@ -135,6 +135,116 @@ class CheckpointManager:
         return True
 
 # ============================================================================
+# GPS/NAVIGATION HELPER FUNCTIONS
+# ============================================================================
+
+def is_valid_gps_coordinate(lat, lon):
+    """Validate GPS coordinates.
+    
+    Args:
+        lat: latitude (-90 to 90)
+        lon: longitude (-180 to 180)
+        
+    Returns:
+        True if coordinates are valid, False otherwise
+    """
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+        
+        # Check for invalid markers (00.000.000 format)
+        if lat_f == 0.0 and lon_f == 0.0:
+            return False
+        
+        # Check valid ranges
+        if lat_f < -90 or lat_f > 90:
+            return False
+        if lon_f < -180 or lon_f > 180:
+            return False
+        
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def interpolate_gps_position(records, index, speed_knots=5.0):
+    """Estimate GPS position for a record with invalid coordinates using surrounding valid positions.
+    
+    Uses timestamp, speed, and course to linearly interpolate position between 
+    surrounding valid GPS points.
+    
+    Args:
+        records: list of all records with timestamp/lat/lon/speed/course fields
+        index: index of record needing position estimation
+        speed_knots: default speed in knots if not available in record
+        
+    Returns:
+        tuple of (estimated_lat, estimated_lon) or (original_lat, original_lon) if can't interpolate
+    """
+    if index < 0 or index >= len(records):
+        return records[index].get('lat', 0), records[index].get('lon', 0)
+    
+    current_rec = records[index]
+    current_time = current_rec.get('time_ms', 0)
+    
+    # Find nearest valid points before and after
+    before_idx = None
+    after_idx = None
+    
+    for i in range(index - 1, -1, -1):
+        if is_valid_gps_coordinate(records[i].get('lat', 0), records[i].get('lon', 0)):
+            before_idx = i
+            break
+    
+    for i in range(index + 1, len(records)):
+        if is_valid_gps_coordinate(records[i].get('lat', 0), records[i].get('lon', 0)):
+            after_idx = i
+            break
+    
+    # If we have both before and after, interpolate
+    if before_idx is not None and after_idx is not None:
+        before_rec = records[before_idx]
+        after_rec = records[after_idx]
+        
+        before_time = before_rec.get('time_ms', 0)
+        after_time = after_rec.get('time_ms', 0)
+        
+        if after_time > before_time and current_time >= before_time and current_time <= after_time:
+            # Linear interpolation
+            t = (current_time - before_time) / (after_time - before_time)
+            
+            before_lat = float(before_rec.get('lat', 0))
+            before_lon = float(before_rec.get('lon', 0))
+            after_lat = float(after_rec.get('lat', 0))
+            after_lon = float(after_rec.get('lon', 0))
+            
+            est_lat = before_lat + t * (after_lat - before_lat)
+            est_lon = before_lon + t * (after_lon - before_lon)
+            
+            return est_lat, est_lon
+    
+    # Fall back to before or after if only one is available
+    if before_idx is not None:
+        return float(records[before_idx].get('lat', 0)), float(records[before_idx].get('lon', 0))
+    if after_idx is not None:
+        return float(records[after_idx].get('lat', 0)), float(records[after_idx].get('lon', 0))
+    
+    # Return original invalid coordinates if can't interpolate
+    return current_rec.get('lat', 0), current_rec.get('lon', 0)
+
+
+def meters_to_feet(meters):
+    """Convert meters to feet.
+    
+    Args:
+        meters: depth/altitude in meters
+        
+    Returns:
+        depth/altitude in feet
+    """
+    return meters * 3.28084
+
+# ============================================================================
 # TIER 1 IMAGE ENHANCEMENT FUNCTIONS
 # ============================================================================
 
@@ -850,7 +960,7 @@ class SonarGUI:
         # Row 2: Scale bar and depth
         ttk.Checkbutton(meta_frame, text="━ Scale Bar", 
                        variable=self.show_scale_bar).grid(row=2, column=0, columnspan=2, sticky='w', padx=10, pady=(10, 0))
-        ttk.Checkbutton(meta_frame, text="🌊 Depth Overlay (m)", 
+        ttk.Checkbutton(meta_frame, text="🌊 Depth Overlay (ft)", 
                        variable=self.show_depth_overlay).grid(row=2, column=2, columnspan=2, sticky='w', padx=10, pady=(10, 0))
         
         # Row 3: GPS
@@ -1684,6 +1794,42 @@ Results are saved to the output directory alongside processed waterfall and vide
                 sys.stdout = _old_stdout
                 sys.stderr = _old_stderr
             
+            # Apply GPS interpolation to fix invalid coordinates
+            self.log_info("")
+            self.log_header("Fixing Invalid GPS Coordinates...")
+            invalid_gps_count = 0
+            interpolated_count = 0
+            
+            for i, record in enumerate(records_data):
+                rec_lat = getattr(record, 'lat', 0)
+                rec_lon = getattr(record, 'lon', 0)
+                
+                # Check if GPS is invalid
+                if not is_valid_gps_coordinate(rec_lat, rec_lon):
+                    invalid_gps_count += 1
+                    # Try to interpolate from surrounding valid points
+                    # Build a list for interpolation function
+                    rec_list = [vars(r) if hasattr(r, '__dict__') else r for r in records_data]
+                    est_lat, est_lon = interpolate_gps_position(rec_list, i)
+                    
+                    if est_lat != rec_lat or est_lon != rec_lon:
+                        # Update record with interpolated coordinates
+                        record.lat = est_lat
+                        record.lon = est_lon
+                        interpolated_count += 1
+            
+            if invalid_gps_count > 0:
+                self.log_info(f"  Found {invalid_gps_count} records with invalid GPS")
+                self.log_info(f"  Interpolated {interpolated_count} positions from surrounding data")
+            else:
+                self.log_info(f"  All GPS coordinates valid")
+            
+            # Restore stdout/stderr after logging
+            _old_stdout = sys.stdout
+            _old_stderr = sys.stderr
+            sys.stdout = _old_stdout
+            sys.stderr = _old_stderr
+            
             if self.cancel_requested:
                 self.log_warning("Processing cancelled by user")
                 elapsed = (datetime.now() - start_time).total_seconds()
@@ -1728,8 +1874,10 @@ Results are saved to the output directory alongside processed waterfall and vide
                 if channels:
                     self.log_info(f"  Channels Found: {sorted(channels)}")
                 if depths:
-                    self.log_info(f"  Depth Range: {min(depths):.3f}m to {max(depths):.3f}m")
-                    self.log_info(f"  Average Depth: {sum(depths)/len(depths):.3f}m")
+                    # Convert to feet for reporting
+                    depths_ft = [meters_to_feet(d) for d in depths]
+                    self.log_info(f"  Depth Range: {min(depths_ft):.1f} ft to {max(depths_ft):.1f} ft")
+                    self.log_info(f"  Average Depth: {sum(depths_ft)/len(depths_ft):.1f} ft")
             
             # Show first few records as sample
             if records_data:
@@ -2306,7 +2454,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                     # Prepare frame data for parallel processing
                     frame_tasks = [
                         (i, rows, row_channels, frame_h, frame_w, color_scheme,
-                         False, False, False,  # Tier 1 enhancements now in post-processing
+                         False, False, False,  # Tier 1 enhancements now in post-processing (kept for compatibility)
                          self.cuda)
                         for i in range(len(rows))
                     ]
@@ -2862,13 +3010,18 @@ Results are saved to the output directory alongside processed waterfall and vide
                 
                 # Write records
                 if results['records']:
-                    writer.writerow(['Record Number', 'Data', 'Channel', 'Depth', 'Latitude', 'Longitude'])
+                    writer.writerow(['Record Number', 'Data', 'Channel', 'Depth (ft)', 'Latitude', 'Longitude'])
                     for i, record in enumerate(results['records'], 1):
                         ch = getattr(record, 'ch', 'N/A')
                         depth = getattr(record, 'depth', 'N/A')
+                        # Convert depth to feet for CSV
+                        if isinstance(depth, (int, float)) and depth != 'N/A':
+                            depth_ft = meters_to_feet(depth)
+                        else:
+                            depth_ft = depth
                         lat = getattr(record, 'lat', 'N/A')
                         lon = getattr(record, 'lon', 'N/A')
-                        writer.writerow([i, str(record), ch, depth, lat, lon])
+                        writer.writerow([i, str(record), ch, depth_ft, lat, lon])
             
             self.log_success(f"✓ CSV exported to: {filename}")
             messagebox.showinfo("Export Successful", f"CSV saved to:\n{filename}")
