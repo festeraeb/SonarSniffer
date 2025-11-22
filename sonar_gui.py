@@ -316,10 +316,12 @@ def apply_colormap_to_image(image, colormap_name='jet', mirror_horizontal=False)
             cmap = matplotlib.cm.get_cmap('jet')
     
     # Apply colormap (returns RGBA, we want RGB)
-    colored = cmap(norm(image))
+    # Use float32 instead of float64 to reduce memory usage by 50%
+    colored = cmap(norm(image.astype(np.float32)))
     
     # Convert to uint8 RGB (drop alpha channel)
-    rgb = (colored[:, :, :3] * 255).astype(np.uint8)
+    # Use float32 multiplication to save memory on large frames
+    rgb = np.clip(colored[:, :, :3] * 255, 0, 255).astype(np.uint8)
     
     return rgb
 
