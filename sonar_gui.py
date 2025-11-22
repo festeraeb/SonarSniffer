@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import sys
 import traceback
-from pathlib import Path
+from pathlib import Path as PathlibPath
 from datetime import datetime
 from io import StringIO
 import contextlib
@@ -26,7 +26,7 @@ from python_cuda_bridge import encode_with_fallback
 from cuda_bridge import get_cuda_bridge
 
 # Add workspace to path for imports
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(PathlibPath(__file__).parent))
 
 # Suppress stdout/stderr during imports to hide debug output
 _capture = StringIO()
@@ -62,13 +62,13 @@ class CheckpointManager:
     def __init__(self, checkpoint_dir=None):
         """Initialize checkpoint manager"""
         if checkpoint_dir is None:
-            checkpoint_dir = str(Path.home() / '.sonarsnifer_checkpoints')
-        self.checkpoint_dir = Path(checkpoint_dir)
+            checkpoint_dir = str(PathlibPath.home() / '.sonarsnifer_checkpoints')
+        self.checkpoint_dir = PathlibPath(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
     def get_checkpoint_path(self, file_path):
         """Get checkpoint file path for a given input file"""
-        file_hash = hash(str(Path(file_path).resolve()))
+        file_hash = hash(str(PathlibPath(file_path).resolve()))
         return self.checkpoint_dir / f"checkpoint_{abs(file_hash)}.json"
     
     def save_checkpoint(self, file_path, stage, data):
@@ -85,7 +85,7 @@ class CheckpointManager:
         checkpoint = {
             'timestamp': datetime.now().isoformat(),
             'file_path': str(file_path),
-            'file_size': Path(file_path).stat().st_size,
+            'file_size': PathlibPath(file_path).stat().st_size,
             'stage': stage,
             'data': data,
         }
@@ -517,8 +517,8 @@ class SonarGUI:
         
         # State variables
         self.current_file = tk.StringVar()
-        self.output_dir = tk.StringVar(value=str(Path.home() / "SonarSniffer_Output"))
-        self.last_output_dir = str(Path.home() / "SonarSniffer_Output")  # Remember last used directory
+        self.output_dir = tk.StringVar(value=str(PathlibPath.home() / "SonarSniffer_Output"))
+        self.last_output_dir = str(PathlibPath.home() / "SonarSniffer_Output")  # Remember last used directory
         self.processing = False
         self.cancel_requested = False
         
@@ -538,34 +538,21 @@ class SonarGUI:
         self.remove_water_column = tk.BooleanVar(value=False)  # Remove water column from video
         self.water_column_sensitivity = tk.DoubleVar(value=0.85)  # Detection sensitivity (0.0-1.0)
         
-        # ============ ADVANCED ENHANCEMENTS ============
-        # PBR Rendering options
-        self.enable_pbr = tk.BooleanVar(value=False)
-        self.pbr_mode = tk.StringVar(value="SIMPLE")  # SIMPLE, ENHANCED, PBR_METALLIC, ACOUSTIC, DIFFERENTIAL
-        self.pbr_quality = tk.StringVar(value="HIGH")  # LOW, MEDIUM, HIGH
+        # ============ BASELINE ENHANCEMENTS (Applied automatically during processing) ============
+        # Applied automatically: contrast stretching, adaptive contrast, edge enhancement, denoising
         
+        # ============ OPTIONAL SECONDARY ENHANCEMENTS ============
         # Radiometric Corrections
-        self.enable_agc = tk.BooleanVar(value=False)  # Automatic Gain Control
+        self.enable_agc = tk.BooleanVar(value=False)  # Automatic Gain Control (secondary pass)
         self.agc_sensitivity = tk.DoubleVar(value=0.5)  # 0.0-1.0
-        self.enable_denoise = tk.BooleanVar(value=False)  # ML-based denoising
-        self.denoise_strength = tk.DoubleVar(value=0.5)  # 0.0-1.0
-        self.enable_destrip = tk.BooleanVar(value=False)  # Remove seam artifacts
         
-        # Metadata Overlay
-        self.enable_metadata_overlay = tk.BooleanVar(value=False)
-        self.show_range_markers = tk.BooleanVar(value=True)
-        self.show_center_cursor = tk.BooleanVar(value=True)
-        self.show_scale_bar = tk.BooleanVar(value=True)
-        self.show_gps_overlay = tk.BooleanVar(value=False)
-        self.show_depth_overlay = tk.BooleanVar(value=False)
+        # Advanced Rendering
+        self.enable_pbr = tk.BooleanVar(value=False)  # PBR rendering (secondary pass)
+        self.pbr_mode = tk.StringVar(value="DIFFERENTIAL")  # Best all-around for sonar
         
         # Target Detection
-        self.enable_target_detection = tk.BooleanVar(value=False)
+        self.enable_target_detection = tk.BooleanVar(value=False)  # Identify rocks, wrecks, anomalies
         self.target_detection_sensitivity = tk.DoubleVar(value=0.5)  # 0.0-1.0
-        
-        # Coordinate Overlay
-        self.enable_coordinate_overlay = tk.BooleanVar(value=False)
-        self.coordinate_viewer_type = tk.StringVar(value="Static")  # Static or HTML
         
         # Data loading for post-processing
         self.loaded_data = None  # Pre-parsed CSV/JSON data
@@ -871,157 +858,79 @@ class SonarGUI:
         # Store reference to data source label for updates
         self.advanced_tab_data_status = data_frame
         
-        # ============ PBR RENDERING SECTION ============
-        pbr_frame = ttk.LabelFrame(main_frame, text="🔬 PBR (Physically-Based) Rendering", padding="15")
-        pbr_frame.grid(row=1, column=0, columnspan=4, sticky='ew', pady=(0, 15))
-        pbr_frame.columnconfigure(1, weight=1)
-        pbr_frame.columnconfigure(3, weight=1)
+        # ============ BASELINE ENHANCEMENTS (Automatic) ============
+        baseline_frame = ttk.LabelFrame(main_frame, text="✨ Baseline Enhancements (Applied Automatically)", padding="15")
+        baseline_frame.grid(row=1, column=0, columnspan=4, sticky='ew', pady=(0, 15))
+        baseline_frame.columnconfigure(2, weight=1)
         
-        ttk.Checkbutton(pbr_frame, text="✓ Enable PBR Rendering", 
-                       variable=self.enable_pbr).grid(row=0, column=0, columnspan=4, sticky='w', pady=(0, 10))
+        info_text = ("The following enhancements are automatically applied during processing for all sonar images:\n"
+                    "• Contrast Stretching (2-98 percentile) - Optimal contrast with minimal clipping\n"
+                    "• Adaptive Histogram Equalization - Local contrast enhancement\n"
+                    "• Edge Enhancement - Subtle sharpening for target visibility\n"
+                    "• Bilateral Filtering - Noise reduction while preserving edges\n\n"
+                    "These provide the best all-around sonar image quality without additional user configuration.")
+        ttk.Label(baseline_frame, text=info_text, style='Info.TLabel', wraplength=850,
+                 foreground='#333333', justify='left').grid(row=0, column=0, columnspan=4, sticky='w', pady=5)
         
-        # Rendering Mode selection
-        ttk.Label(pbr_frame, text="Rendering Mode:", style='Header.TLabel').grid(row=1, column=0, sticky='w', padx=10)
-        pbr_mode_combo = ttk.Combobox(pbr_frame, textvariable=self.pbr_mode,
-                                      values=["SIMPLE", "ENHANCED", "PBR_METALLIC", "ACOUSTIC", "DIFFERENTIAL"],
-                                      state='readonly', width=20)
-        pbr_mode_combo.grid(row=1, column=1, padx=10, sticky='ew')
+        # ============ OPTIONAL SECONDARY ENHANCEMENTS ============
+        secondary_frame = ttk.LabelFrame(main_frame, text="🔧 Optional Secondary Enhancements", padding="15")
+        secondary_frame.grid(row=2, column=0, columnspan=4, sticky='ew', pady=(0, 15))
+        secondary_frame.columnconfigure(1, weight=1)
+        secondary_frame.columnconfigure(3, weight=1)
         
-        # Quality level
-        ttk.Label(pbr_frame, text="Quality Level:", style='Header.TLabel').grid(row=1, column=2, sticky='w', padx=10)
-        pbr_quality_combo = ttk.Combobox(pbr_frame, textvariable=self.pbr_quality,
-                                         values=["LOW", "MEDIUM", "HIGH"],
-                                         state='readonly', width=15)
-        pbr_quality_combo.grid(row=1, column=3, padx=10, sticky='ew')
-        
-        # Info text
-        info_text = ("PBR rendering uses Fresnel-Schlick reflection equations and physical material properties "
-                    "to create highly realistic acoustic material visualization. Supports differential rendering "
-                    "for enhanced target contrast.")
-        ttk.Label(pbr_frame, text=info_text, style='Info.TLabel', wraplength=800,
-                 foreground='#666666').grid(row=2, column=0, columnspan=4, sticky='w', pady=(10, 0))
-        
-        # ============ RADIOMETRIC CORRECTIONS ============
-        radio_frame = ttk.LabelFrame(main_frame, text="📊 Radiometric Corrections", padding="15")
-        radio_frame.grid(row=2, column=0, columnspan=4, sticky='ew', pady=(0, 15))
-        radio_frame.columnconfigure(1, weight=1)
-        radio_frame.columnconfigure(3, weight=1)
-        
-        # Row 1: AGC
-        ttk.Checkbutton(radio_frame, text="✓ Automatic Gain Control (AGC)", 
+        # AGC Enhancement
+        ttk.Checkbutton(secondary_frame, text="✓ Automatic Gain Control (AGC)", 
                        variable=self.enable_agc).grid(row=0, column=0, columnspan=2, sticky='w', padx=10)
-        ttk.Label(radio_frame, text="Sensitivity:", style='Info.TLabel').grid(row=0, column=2, sticky='e', padx=10)
+        ttk.Label(secondary_frame, text="Sensitivity:", style='Info.TLabel').grid(row=0, column=2, sticky='e', padx=10)
         
-        agc_scale = ttk.Scale(radio_frame, from_=0.0, to=1.0, variable=self.agc_sensitivity, orient='horizontal')
+        agc_scale = ttk.Scale(secondary_frame, from_=0.0, to=1.0, variable=self.agc_sensitivity, orient='horizontal')
         agc_scale.grid(row=0, column=3, padx=10, sticky='ew')
         
-        self.agc_value_label = ttk.Label(radio_frame, text=f"{self.agc_sensitivity.get():.2f}",
+        self.agc_value_label = ttk.Label(secondary_frame, text=f"{self.agc_sensitivity.get():.2f}",
                                         style='Info.TLabel', foreground='#3498db')
         self.agc_value_label.grid(row=0, column=4, padx=5)
         agc_scale.configure(command=lambda v: self.agc_value_label.config(text=f"{float(v):.2f}"))
         
-        # Row 2: Denoising
-        ttk.Checkbutton(radio_frame, text="✓ ML-Based Denoising", 
-                       variable=self.enable_denoise).grid(row=1, column=0, columnspan=2, sticky='w', padx=10, pady=(10, 0))
-        ttk.Label(radio_frame, text="Strength:", style='Info.TLabel').grid(row=1, column=2, sticky='e', padx=10, pady=(10, 0))
+        agc_info = ttk.Label(secondary_frame, text="Adaptive gain for uniform brightness across range",
+                            style='Info.TLabel', foreground='#999999', font=('Helvetica', 8))
+        agc_info.grid(row=1, column=0, columnspan=5, sticky='w', padx=10, pady=(0, 10))
         
-        denoise_scale = ttk.Scale(radio_frame, from_=0.0, to=1.0, variable=self.denoise_strength, orient='horizontal')
-        denoise_scale.grid(row=1, column=3, padx=10, sticky='ew', pady=(10, 0))
+        # PBR Rendering
+        ttk.Checkbutton(secondary_frame, text="✓ Physically-Based Rendering (PBR)", 
+                       variable=self.enable_pbr).grid(row=2, column=0, columnspan=4, sticky='w', padx=10, pady=(10, 0))
         
-        self.denoise_value_label = ttk.Label(radio_frame, text=f"{self.denoise_strength.get():.2f}",
-                                            style='Info.TLabel', foreground='#3498db')
-        self.denoise_value_label.grid(row=1, column=4, padx=5, pady=(10, 0))
-        denoise_scale.configure(command=lambda v: self.denoise_value_label.config(text=f"{float(v):.2f}"))
+        pbr_info = ttk.Label(secondary_frame, text="Advanced material property visualization using Fresnel equations (DIFFERENTIAL mode: best for sonar)",
+                            style='Info.TLabel', foreground='#999999', font=('Helvetica', 8))
+        pbr_info.grid(row=3, column=0, columnspan=5, sticky='w', padx=10, pady=(0, 10))
         
-        # Row 3: Destripping
-        ttk.Checkbutton(radio_frame, text="✓ Remove Seam Artifacts (Destripping)", 
-                       variable=self.enable_destrip).grid(row=2, column=0, columnspan=4, sticky='w', padx=10, pady=(10, 0))
+        # Target Detection
+        ttk.Checkbutton(secondary_frame, text="✓ Automated Target Detection", 
+                       variable=self.enable_target_detection).grid(row=4, column=0, columnspan=2, sticky='w', padx=10, pady=(10, 0))
+        ttk.Label(secondary_frame, text="Sensitivity:", style='Info.TLabel').grid(row=4, column=2, sticky='e', padx=10, pady=(10, 0))
         
-        # Info text
-        info_text2 = ("Advanced radiometric processing improves sonar image quality by correcting gain variations, "
-                     "removing noise while preserving detail, and eliminating seam artifacts from adjacent ping lines.")
-        ttk.Label(radio_frame, text=info_text2, style='Info.TLabel', wraplength=800,
-                 foreground='#666666').grid(row=3, column=0, columnspan=5, sticky='w', pady=(10, 0))
+        target_scale = ttk.Scale(secondary_frame, from_=0.0, to=1.0, variable=self.target_detection_sensitivity, orient='horizontal')
+        target_scale.grid(row=4, column=3, padx=10, sticky='ew', pady=(10, 0))
         
-        # ============ METADATA OVERLAY ============
-        meta_frame = ttk.LabelFrame(main_frame, text="📍 Metadata Overlay", padding="15")
-        meta_frame.grid(row=3, column=0, columnspan=4, sticky='ew', pady=(0, 15))
-        meta_frame.columnconfigure(2, weight=1)
+        self.target_value_label = ttk.Label(secondary_frame, text=f"{self.target_detection_sensitivity.get():.2f}",
+                                           style='Info.TLabel', foreground='#3498db')
+        self.target_value_label.grid(row=4, column=4, padx=5, pady=(10, 0))
+        target_scale.configure(command=lambda v: self.target_value_label.config(text=f"{float(v):.2f}"))
         
-        ttk.Checkbutton(meta_frame, text="✓ Enable Metadata Overlay", 
-                       variable=self.enable_metadata_overlay).grid(row=0, column=0, columnspan=4, sticky='w', padx=10, pady=(0, 10))
+        target_info = ttk.Label(secondary_frame, text="Identifies rocks, wrecks, and anomalies with confidence scoring",
+                               style='Info.TLabel', foreground='#999999', font=('Helvetica', 8))
+        target_info.grid(row=5, column=0, columnspan=5, sticky='w', padx=10, pady=(0, 10))
         
-        # Row 1: Range markers and cursor
-        ttk.Checkbutton(meta_frame, text="📏 Range Markers (m)", 
-                       variable=self.show_range_markers).grid(row=1, column=0, columnspan=2, sticky='w', padx=10)
-        ttk.Checkbutton(meta_frame, text="⊕ Center Cursor", 
-                       variable=self.show_center_cursor).grid(row=1, column=2, columnspan=2, sticky='w', padx=10)
+        # Reference Data Overlay
+        ttk.Checkbutton(secondary_frame, text="✓ Add Reference Data (Coordinates, Depth, GPS)", 
+                       variable=self.enable_coordinate_overlay).grid(row=6, column=0, columnspan=4, sticky='w', padx=10, pady=(10, 0))
         
-        # Row 2: Scale bar and depth
-        ttk.Checkbutton(meta_frame, text="━ Scale Bar", 
-                       variable=self.show_scale_bar).grid(row=2, column=0, columnspan=2, sticky='w', padx=10, pady=(10, 0))
-        ttk.Checkbutton(meta_frame, text="🌊 Depth Overlay (ft)", 
-                       variable=self.show_depth_overlay).grid(row=2, column=2, columnspan=2, sticky='w', padx=10, pady=(10, 0))
-        
-        # Row 3: GPS
-        ttk.Checkbutton(meta_frame, text="📡 GPS/Location Data", 
-                       variable=self.show_gps_overlay).grid(row=3, column=0, columnspan=4, sticky='w', padx=10, pady=(10, 0))
-        
-        # Info text
-        info_text3 = ("Real-time metadata overlay renders navigation data, range indicators, and depth information "
-                     "directly onto the sonar video for enhanced situational awareness.")
-        ttk.Label(meta_frame, text=info_text3, style='Info.TLabel', wraplength=800,
-                 foreground='#666666').grid(row=4, column=0, columnspan=4, sticky='w', pady=(10, 0))
-        
-        # ============ TARGET DETECTION ============
-        target_frame = ttk.LabelFrame(main_frame, text="🎯 Target Detection & Marking", padding="15")
-        target_frame.grid(row=4, column=0, columnspan=4, sticky='ew', pady=(0, 15))
-        target_frame.columnconfigure(2, weight=1)
-        
-        ttk.Checkbutton(target_frame, text="✓ Enable Target Detection", 
-                       variable=self.enable_target_detection).grid(row=0, column=0, columnspan=4, sticky='w', padx=10, pady=(0, 10))
-        
-        # Sensitivity slider
-        ttk.Label(target_frame, text="Detection Sensitivity:").grid(row=1, column=0, sticky='w', padx=10)
-        ttk.Scale(target_frame, from_=0, to=1, orient='horizontal',
-                 variable=self.target_detection_sensitivity).grid(row=1, column=1, columnspan=2, sticky='ew', padx=5)
-        ttk.Label(target_frame, text="0=Low  1=High", font=('Helvetica', 8),
-                 foreground='#666').grid(row=1, column=3, sticky='w', padx=5)
-        
-        # Info text
-        info_text4 = ("Automatically detects rocks, wrecks, and other hard targets in sonar imagery using "
-                     "multi-scale blob detection and statistical anomaly analysis. Results are marked with "
-                     "confidence scores and classified by target type (rock/wreck/anomaly).")
-        ttk.Label(target_frame, text=info_text4, style='Info.TLabel', wraplength=800,
-                 foreground='#666666').grid(row=2, column=0, columnspan=4, sticky='w', pady=(10, 0))
-        
-        # ============ COORDINATE OVERLAY ============
-        coord_frame = ttk.LabelFrame(main_frame, text="🗺️ Coordinate Display Overlay", padding="15")
-        coord_frame.grid(row=5, column=0, columnspan=4, sticky='ew', pady=(0, 15))
-        coord_frame.columnconfigure(2, weight=1)
-        
-        ttk.Checkbutton(coord_frame, text="✓ Enable Coordinate Overlay", 
-                       variable=self.enable_coordinate_overlay).grid(row=0, column=0, columnspan=4, sticky='w', padx=10, pady=(0, 10))
-        
-        # Viewer type
-        ttk.Label(coord_frame, text="Display Mode:").grid(row=1, column=0, sticky='w', padx=10)
-        coord_combo = ttk.Combobox(coord_frame, textvariable=self.coordinate_viewer_type,
-                                  values=["Static", "HTML"], state='readonly', width=15)
-        coord_combo.grid(row=1, column=1, sticky='w', padx=5)
-        
-        coord_help = ttk.Label(coord_frame, text="Static: PNG with grid overlay   |   HTML: Interactive viewer",
-                              font=('Helvetica', 8), foreground='#666')
-        coord_help.grid(row=1, column=2, columnspan=2, sticky='w', padx=5)
-        
-        # Info text
-        info_text5 = ("Adds interactive coordinate grid showing latitude, longitude, and depth at any cursor position. "
-                     "Supports both static image overlays with embedded grid and dynamic HTML viewers for exploration.")
-        ttk.Label(coord_frame, text=info_text5, style='Info.TLabel', wraplength=800,
-                 foreground='#666666').grid(row=2, column=0, columnspan=4, sticky='w', pady=(10, 0))
+        ref_info = ttk.Label(secondary_frame, text="Overlays geospatial grid, depth markers, and navigation data onto images",
+                            style='Info.TLabel', foreground='#999999', font=('Helvetica', 8))
+        ref_info.grid(row=7, column=0, columnspan=5, sticky='w', padx=10)
         
         # ============ EXECUTE BUTTON ============
         execute_frame = ttk.Frame(main_frame)
-        execute_frame.grid(row=6, column=0, columnspan=4, sticky='ew', pady=(20, 0))
+        execute_frame.grid(row=3, column=0, columnspan=4, sticky='ew', pady=(20, 0))
         execute_frame.columnconfigure(0, weight=1)
         
         style = ttk.Style()
@@ -1141,15 +1050,39 @@ Results are saved to the output directory alongside processed waterfall and vide
             self.log_header("ENHANCEMENT PROCESSING")
             self.log_header("="*70)
             
+            from baseline_enhancements import BaselineEnhancer
+            from enhancement_pipeline import EnhancementPipeline, SecondaryEnhancementApplier
+            
             records_data = results.get('records', [])
             video_path = results.get('video_path')
             mosaic_paths = results.get('mosaic_paths', [])
-            output_dir = self.output_dir.get().strip() or str(Path.home() / 'SonarSniffer_Output')
+            output_dir = self.output_dir.get().strip() or str(PathlibPath.home() / 'SonarSniffer_Output')
             
             self.log_info(f"Processing {len(records_data)} records with enhancements...")
             
+            # ============ APPLY BASELINE ENHANCEMENTS (Automatic) ============
+            if mosaic_paths:
+                self.log_header("\nApplying Baseline Enhancements (Automatic)...")
+                self.log_info("  • Contrast Stretching (2-98 percentile)")
+                self.log_info("  • Adaptive Histogram Equalization")
+                self.log_info("  • Edge Enhancement")
+                self.log_info("  • Bilateral Denoising")
+                
+                for mosaic_path in mosaic_paths:
+                    if PathlibPath(mosaic_path).exists():
+                        try:
+                            success, enhanced_path = EnhancementPipeline.apply_baseline_to_mosaic(
+                                mosaic_path,
+                                output_dir,
+                                create_backup=False
+                            )
+                            if success:
+                                self.log_success(f"✓ Baseline enhanced: {PathlibPath(enhanced_path).name}")
+                        except Exception as e:
+                            self.log_warning(f"Baseline enhancement skipped for {PathlibPath(mosaic_path).name}: {e}")
+            
             # Apply metadata overlay to video if enabled
-            if self.enable_metadata_overlay.get() and video_path and Path(video_path).exists():
+            if self.enable_metadata_overlay.get() and video_path and PathlibPath(video_path).exists():
                 self.log_header("\nApplying Metadata Overlays to Video...")
                 try:
                     from video_metadata_overlay import VideoMetadataIntegrator
@@ -1200,7 +1133,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                     
                     # Write enhanced video if we have frames
                     if enhanced_frames:
-                        output_path = Path(output_dir) / f"{Path(video_path).stem}_enhanced.mp4"
+                        output_path = PathlibPath(output_dir) / f"{PathlibPath(video_path).stem}_enhanced.mp4"
                         output_path.parent.mkdir(parents=True, exist_ok=True)
                         
                         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -1235,7 +1168,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                     )
                     
                     for mosaic_path in mosaic_paths:
-                        if Path(mosaic_path).exists():
+                        if PathlibPath(mosaic_path).exists():
                             try:
                                 # Load the mosaic image
                                 mosaic_img = Image.open(mosaic_path)
@@ -1258,7 +1191,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                                 )
                                 
                                 # Save rendered mosaic
-                                output_path = Path(output_dir) / f"{Path(mosaic_path).stem}_pbr.png"
+                                output_path = PathlibPath(output_dir) / f"{PathlibPath(mosaic_path).stem}_pbr.png"
                                 output_path.parent.mkdir(parents=True, exist_ok=True)
                                 
                                 rendered_img = Image.fromarray(rendered)
@@ -1266,7 +1199,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                                 
                                 self.log_success(f"✓ PBR-rendered mosaic: {output_path.name}")
                             except Exception as frame_error:
-                                self.log_warning(f"PBR rendering failed for {Path(mosaic_path).name}: {frame_error}")
+                                self.log_warning(f"PBR rendering failed for {PathlibPath(mosaic_path).name}: {frame_error}")
                 except Exception as e:
                     self.log_warning(f"PBR rendering skipped: {e}")
             
@@ -1281,7 +1214,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                     corrector = RadiometricCorrector()
                     
                     for mosaic_path in mosaic_paths:
-                        if Path(mosaic_path).exists():
+                        if PathlibPath(mosaic_path).exists():
                             try:
                                 # Load the mosaic image
                                 mosaic_img = Image.open(mosaic_path)
@@ -1314,7 +1247,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                                 )
                                 
                                 # Save corrected mosaic
-                                output_path = Path(output_dir) / f"{Path(mosaic_path).stem}_corrected.png"
+                                output_path = PathlibPath(output_dir) / f"{PathlibPath(mosaic_path).stem}_corrected.png"
                                 output_path.parent.mkdir(parents=True, exist_ok=True)
                                 
                                 corrected_img = Image.fromarray(corrected)
@@ -1322,7 +1255,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                                 
                                 self.log_success(f"✓ Radiometrically corrected: {output_path.name}")
                             except Exception as frame_error:
-                                self.log_warning(f"Radiometric correction failed for {Path(mosaic_path).name}: {frame_error}")
+                                self.log_warning(f"Radiometric correction failed for {PathlibPath(mosaic_path).name}: {frame_error}")
                 except Exception as e:
                     self.log_warning(f"Radiometric corrections skipped: {e}")
             
@@ -1335,7 +1268,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                     detector = TargetDetector(sensitivity=self.target_detection_sensitivity.get())
                     
                     for mosaic_path in mosaic_paths:
-                        if Path(mosaic_path).exists():
+                        if PathlibPath(mosaic_path).exists():
                             try:
                                 # Load mosaic
                                 mosaic_img = Image.open(mosaic_path)
@@ -1365,7 +1298,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                                     )
                                     
                                     # Save marked image
-                                    output_path = Path(output_dir) / f"{Path(mosaic_path).stem}_targets.png"
+                                    output_path = PathlibPath(output_dir) / f"{PathlibPath(mosaic_path).stem}_targets.png"
                                     output_path.parent.mkdir(parents=True, exist_ok=True)
                                     
                                     marked_img = Image.fromarray(cv2.cvtColor(marked, cv2.COLOR_BGR2RGB))
@@ -1373,9 +1306,9 @@ Results are saved to the output directory alongside processed waterfall and vide
                                     
                                     self.log_success(f"✓ Detected {len(targets)} targets: {output_path.name}")
                                 else:
-                                    self.log_info(f"No targets detected in {Path(mosaic_path).name}")
+                                    self.log_info(f"No targets detected in {PathlibPath(mosaic_path).name}")
                             except Exception as frame_error:
-                                self.log_warning(f"Target detection failed for {Path(mosaic_path).name}: {frame_error}")
+                                self.log_warning(f"Target detection failed for {PathlibPath(mosaic_path).name}: {frame_error}")
                 except Exception as e:
                     self.log_warning(f"Target detection skipped: {e}")
             
@@ -1422,18 +1355,18 @@ Results are saved to the output directory alongside processed waterfall and vide
                     viewer_type = self.coordinate_viewer_type.get().lower().replace(' ', '_')
                     
                     for mosaic_path in mosaic_paths:
-                        if Path(mosaic_path).exists():
+                        if PathlibPath(mosaic_path).exists():
                             try:
                                 output_path = add_coordinate_overlay(
                                     str(mosaic_path),
                                     geo_ref,
                                     viewer_type=viewer_type,
-                                    title=f"Sonar Image - {Path(mosaic_path).stem}"
+                                    title=f"Sonar Image - {PathlibPath(mosaic_path).stem}"
                                 )
                                 
-                                self.log_success(f"✓ Coordinate overlay: {Path(output_path).name}")
+                                self.log_success(f"✓ Coordinate overlay: {PathlibPath(output_path).name}")
                             except Exception as frame_error:
-                                self.log_warning(f"Coordinate overlay failed for {Path(mosaic_path).name}: {frame_error}")
+                                self.log_warning(f"Coordinate overlay failed for {PathlibPath(mosaic_path).name}: {frame_error}")
                 except Exception as e:
                     self.log_warning(f"Coordinate overlay skipped: {e}")
             
@@ -1457,13 +1390,13 @@ Results are saved to the output directory alongside processed waterfall and vide
         filename = filedialog.askopenfilename(
             title="Load Parsed Sonar Data",
             filetypes=file_types,
-            initialdir=str(Path.home() / "Downloads")
+            initialdir=str(PathlibPath.home() / "Downloads")
         )
         
         if filename:
             try:
                 # Determine file type and load accordingly
-                file_ext = Path(filename).suffix.lower()
+                file_ext = PathlibPath(filename).suffix.lower()
                 
                 if file_ext == '.csv':
                     # Load CSV data
@@ -1493,7 +1426,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                     return
                 
                 # Update status label
-                filename_short = Path(filename).name
+                filename_short = PathlibPath(filename).name
                 self.data_source_label.config(
                     text=f"✓ Loaded: {filename_short} ({data_type})",
                     foreground='#2ecc71'
@@ -1551,12 +1484,12 @@ Results are saved to the output directory alongside processed waterfall and vide
                 ("Klein SDF", "*.sdf"),
                 ("All Files", "*.*")
             ],
-            initialdir=str(Path.home() / "Downloads")
+            initialdir=str(PathlibPath.home() / "Downloads")
         )
         
         if filename:
             self.current_file.set(filename)
-            self.log_info(f"✓ File selected: {Path(filename).name}")
+            self.log_info(f"✓ File selected: {PathlibPath(filename).name}")
     
     def clear_file(self):
         """Clear selected file"""
@@ -1567,7 +1500,7 @@ Results are saved to the output directory alongside processed waterfall and vide
         """Open directory browser to select output folder"""
         directory = filedialog.askdirectory(
             title="Select Output Directory",
-            initialdir=self.last_output_dir or str(Path.home())
+            initialdir=self.last_output_dir or str(PathlibPath.home())
         )
         
         if directory:
@@ -1577,7 +1510,7 @@ Results are saved to the output directory alongside processed waterfall and vide
     
     def clear_output_dir(self):
         """Reset output directory to default"""
-        default_dir = str(Path.home() / "SonarSniffer_Output")
+        default_dir = str(PathlibPath.home() / "SonarSniffer_Output")
         self.output_dir.set(default_dir)
         self.log_info(f"Output directory reset to: {default_dir}")
     
@@ -1639,7 +1572,7 @@ Results are saved to the output directory alongside processed waterfall and vide
             
             start_time = datetime.now()
             file_size = os.path.getsize(file_path)
-            filename = Path(file_path).name
+            filename = PathlibPath(file_path).name
             
             # Get processing options
             selected_scheme = self.color_scheme.get()
@@ -1694,7 +1627,7 @@ Results are saved to the output directory alongside processed waterfall and vide
             self.log_info("")
             
             # Detect file format and parse accordingly using universal parser
-            file_ext = Path(file_path).suffix.lower()
+            file_ext = PathlibPath(file_path).suffix.lower()
             self.log_info(f"File format detected: {file_ext}")
             
             # Suppress debug output from parser
@@ -1920,7 +1853,7 @@ Results are saved to the output directory alongside processed waterfall and vide
             self.log_option(f"  CSV Export: {self.include_csv.get()}")
             self.log_option(f"  JSON Export: {self.include_json.get()}")
             self.log_option(f"  Color Scheme: {color_scheme_key} ({self.color_scheme.get()})")
-            self.log_option(f"  Video Output: {'Yes' if self.include_video.get() else 'No'}" + (f" → {Path(video_path).name}" if video_path else ""))
+            self.log_option(f"  Video Output: {'Yes' if self.include_video.get() else 'No'}" + (f" → {PathlibPath(video_path).name}" if video_path else ""))
             self.log_option(f"  Mosaic Output: {'Yes' if self.include_waterfall.get() else 'No'}" + (f" ({len(mosaic_paths)} channels)" if mosaic_paths else ""))
             self.log_option(f"  KML Map: {'Yes' if self.include_kml.get() else 'No'}")
             self.log_option(f"  MBTiles/Leaflet: {'Yes (auto-launch: ' + ('Yes' if self.auto_launch_map.get() else 'No') + ')' if self.include_mbtiles.get() else 'No'}")
@@ -1956,11 +1889,11 @@ Results are saved to the output directory alongside processed waterfall and vide
             
             # Auto-export files based on checkboxes
             try:
-                output_dir = self.output_dir.get().strip() or str(Path.home() / 'SonarSniffer_Output')
-                Path(output_dir).mkdir(parents=True, exist_ok=True)
+                output_dir = self.output_dir.get().strip() or str(PathlibPath.home() / 'SonarSniffer_Output')
+                PathlibPath(output_dir).mkdir(parents=True, exist_ok=True)
                 
                 # Generate filename stem from input file
-                file_stem = Path(file_path).stem
+                file_stem = PathlibPath(file_path).stem
                 
                 # Auto-export CSV if enabled
                 if self.include_csv.get():
@@ -1975,7 +1908,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                     from survey_html_generator import generate_survey_report
                     survey_path = generate_survey_report(records_data, file_stem, output_dir)
                     if survey_path:
-                        self.log_success(f"✓ Survey report generated: {Path(survey_path).name}")
+                        self.log_success(f"✓ Survey report generated: {PathlibPath(survey_path).name}")
                 except Exception as e:
                     self.log_warning(f"Could not generate survey report: {e}")
                 
@@ -1989,15 +1922,15 @@ Results are saved to the output directory alongside processed waterfall and vide
                         from mbtiles_generator import generate_mbtiles
                         result = generate_mbtiles(records_data, file_stem, output_dir)
                         if result:
-                            self.log_success(f"✓ MBTiles generated: {Path(result['mbtiles_path']).name} ({result['tile_count']} tiles)")
+                            self.log_success(f"✓ MBTiles generated: {PathlibPath(result['mbtiles_path']).name} ({result['tile_count']} tiles)")
                             if result['html_path'] and result['html_path'].exists():
-                                self.log_success(f"✓ Map HTML created: {Path(result['html_path']).name}")
+                                self.log_success(f"✓ Map HTML created: {PathlibPath(result['html_path']).name}")
                     except Exception as e:
                         self.log_error(f"MBTiles generation error: {e}")
                     
                     # Auto-launch map if enabled
                     if self.auto_launch_map.get():
-                        map_path = Path(output_dir) / f"{file_stem}_map.html"
+                        map_path = PathlibPath(output_dir) / f"{file_stem}_map.html"
                         if map_path.exists():
                             import webbrowser
                             webbrowser.open(str(map_path))
@@ -2082,12 +2015,12 @@ Results are saved to the output directory alongside processed waterfall and vide
         Uses StreamingVideoEncoder when memory would exceed limits to prevent OOM crashes.
         """
         if not output_dir:
-            output_dir = Path(file_path).parent
+            output_dir = PathlibPath(file_path).parent
         else:
-            output_dir = Path(output_dir)
+            output_dir = PathlibPath(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
         
-        filename_stem = Path(file_path).stem
+        filename_stem = PathlibPath(file_path).stem
         video_path = output_dir / f"{filename_stem}_waterfall.mp4"
         
         try:
@@ -2101,7 +2034,7 @@ Results are saved to the output directory alongside processed waterfall and vide
             # Note: Process ALL records, not just first 600, to get complete side-scan data
             rows = []
             row_channels = []  # Track which channel each row came from
-            rsd_file = Path(file_path)
+            rsd_file = PathlibPath(file_path)
             
             # DIAGNOSTIC: Count records by channel AND check for sonar data
             ch_counts = {}
@@ -2585,8 +2518,8 @@ Results are saved to the output directory alongside processed waterfall and vide
                 frames.clear()
                 del frames
                 
-                if success and Path(output_file).exists():
-                    self.log_success(f"Video successfully encoded: {Path(output_file).name}")
+                if success and PathlibPath(output_file).exists():
+                    self.log_success(f"Video successfully encoded: {PathlibPath(output_file).name}")
                     return output_file
                 else:
                     self.log_error(f"Video encoding failed")
@@ -2677,12 +2610,12 @@ Results are saved to the output directory alongside processed waterfall and vide
     def generate_georeferenced_mosaic(self, file_path, records_data, output_dir=None, color_scheme='jet'):
         """Generate georeferenced sonar mosaic images for KML/mbtiles overlay"""
         if not output_dir:
-            output_dir = Path(file_path).parent
+            output_dir = PathlibPath(file_path).parent
         else:
-            output_dir = Path(output_dir)
+            output_dir = PathlibPath(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
         
-        filename_stem = Path(file_path).stem
+        filename_stem = PathlibPath(file_path).stem
         
         try:
             self.log_info("")
@@ -2707,7 +2640,7 @@ Results are saved to the output directory alongside processed waterfall and vide
             self.log_info(f"Channels with sonar data: {ch_has_sonar_mosaic}")
             
             mosaic_paths = {}
-            rsd_file = Path(file_path)
+            rsd_file = PathlibPath(file_path)
             
             # Determine which channels to use for side-scan
             # Prefer channels 4/5 (standard side-scan), but fall back to any channel with sonar data
@@ -2953,7 +2886,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                     self.log_info(f"  {fmt.upper()}: {path.name}")
             
             # Get current output directory and pass it to post-processing
-            output_dir = self.output_dir.get().strip() or str(Path.home() / "SonarSniffer_Output")
+            output_dir = self.output_dir.get().strip() or str(PathlibPath.home() / "SonarSniffer_Output")
             
             # Show dialog
             dialog = PostProcessingDialog(self.root, records_list, on_export_complete, output_dir=output_dir)
@@ -2965,8 +2898,8 @@ Results are saved to the output directory alongside processed waterfall and vide
     
     def export_csv(self, default_name):
         """Export results to CSV"""
-        output_dir = self.output_dir.get().strip() or str(Path.home())
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        output_dir = self.output_dir.get().strip() or str(PathlibPath.home())
+        PathlibPath(output_dir).mkdir(parents=True, exist_ok=True)
         
         filename = filedialog.asksaveasfilename(
             title="Save Results As CSV",
@@ -3032,8 +2965,8 @@ Results are saved to the output directory alongside processed waterfall and vide
     
     def export_json(self, default_name):
         """Export results to JSON"""
-        output_dir = self.output_dir.get().strip() or str(Path.home())
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        output_dir = self.output_dir.get().strip() or str(PathlibPath.home())
+        PathlibPath(output_dir).mkdir(parents=True, exist_ok=True)
         
         filename = filedialog.asksaveasfilename(
             title="Save Results As JSON",
@@ -3086,8 +3019,8 @@ Results are saved to the output directory alongside processed waterfall and vide
             messagebox.showwarning("KML Disabled", "KML generation was not enabled in processing options")
             return
         
-        output_dir = self.output_dir.get().strip() or str(Path.home())
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        output_dir = self.output_dir.get().strip() or str(PathlibPath.home())
+        PathlibPath(output_dir).mkdir(parents=True, exist_ok=True)
         
         filename = filedialog.asksaveasfilename(
             title="Save Results As KML",
@@ -3132,7 +3065,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                         min_lat, max_lat, min_lon, max_lon = bounds
                         
                         # Use relative path if same directory
-                        mosaic_file = Path(mosaic_path).name
+                        mosaic_file = PathlibPath(mosaic_path).name
                         
                         kml_content += f'''    <GroundOverlay>
       <name>Channel {ch} Sonar Mosaic</name>
@@ -3151,7 +3084,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                     elif mosaic_info[0] == 'geotiff':
                         # GeoTIFF format
                         mosaic_path = mosaic_info[1]
-                        mosaic_file = Path(mosaic_path).name
+                        mosaic_file = PathlibPath(mosaic_path).name
                         
                         kml_content += f'''    <GroundOverlay>
       <name>Channel {ch} Sonar Mosaic (GeoTIFF)</name>
@@ -3194,9 +3127,9 @@ Results are saved to the output directory alongside processed waterfall and vide
                 for ch, mosaic_info in sorted(mosaic_paths.items()):
                     if mosaic_info[0] == 'png':
                         import shutil
-                        mosaic_path = Path(mosaic_info[1])
-                        world_path = Path(mosaic_info[2])
-                        dest_dir = Path(filename).parent
+                        mosaic_path = PathlibPath(mosaic_info[1])
+                        world_path = PathlibPath(mosaic_info[2])
+                        dest_dir = PathlibPath(filename).parent
                         
                         # Copy mosaic and world file
                         shutil.copy2(mosaic_path, dest_dir / mosaic_path.name)
@@ -3214,8 +3147,8 @@ Results are saved to the output directory alongside processed waterfall and vide
     
     def export_mbtiles(self, default_name):
         """Export results as mbtiles with interactive Leaflet.js viewer"""
-        output_dir = self.output_dir.get().strip() or str(Path.home())
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        output_dir = self.output_dir.get().strip() or str(PathlibPath.home())
+        PathlibPath(output_dir).mkdir(parents=True, exist_ok=True)
         
         filename = filedialog.asksaveasfilename(
             title="Save Results As MBTiles Map",
@@ -3463,8 +3396,8 @@ Results are saved to the output directory alongside processed waterfall and vide
     
     def export_all(self, default_name):
         """Export to all formats"""
-        output_dir = self.output_dir.get().strip() or str(Path.home())
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        output_dir = self.output_dir.get().strip() or str(PathlibPath.home())
+        PathlibPath(output_dir).mkdir(parents=True, exist_ok=True)
         
         folder = filedialog.askdirectory(
             title="Select folder to save all formats",
@@ -3503,7 +3436,7 @@ Results are saved to the output directory alongside processed waterfall and vide
     
     def _export_csv_auto(self, records_data, output_dir, file_stem, file_path):
         """Auto-export results to CSV without file dialog"""
-        filepath = Path(output_dir) / f"{file_stem}_results.csv"
+        filepath = PathlibPath(output_dir) / f"{file_stem}_results.csv"
         
         try:
             import csv
@@ -3515,7 +3448,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                 writer.writerow(['SonarSniffer Processing Report - CSV Export'])
                 writer.writerow([''])
                 writer.writerow(['Processing Metadata'])
-                writer.writerow(['Filename', Path(file_path).name])
+                writer.writerow(['Filename', PathlibPath(file_path).name])
                 writer.writerow(['File Path', file_path])
                 writer.writerow(['Processing Time (s)', f"{self.last_results['processing_time']:.3f}"])
                 writer.writerow(['Total Records', self.last_results['record_count']])
@@ -3550,14 +3483,14 @@ Results are saved to the output directory alongside processed waterfall and vide
     
     def _export_json_auto(self, records_data, output_dir, file_stem, file_path):
         """Auto-export results to JSON without file dialog"""
-        filepath = Path(output_dir) / f"{file_stem}_results.json"
+        filepath = PathlibPath(output_dir) / f"{file_stem}_results.json"
         
         try:
             import json
             
             data = {
                 'metadata': {
-                    'filename': Path(file_path).name,
+                    'filename': PathlibPath(file_path).name,
                     'file_path': file_path,
                     'processing_time_seconds': self.last_results['processing_time'],
                     'total_records': self.last_results['record_count'],
@@ -3641,7 +3574,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                         else:
                             mosaic_path = str(mosaic_info)
                         
-                        if Path(mosaic_path).exists():
+                        if PathlibPath(mosaic_path).exists():
                             overlay_name = f"Channel {ch} Mosaic"
                             ground_overlay = overlay_folder.newgroundoverlay(name=overlay_name)
                             ground_overlay.icon.href = f"file:///{mosaic_path}"
@@ -3653,7 +3586,7 @@ Results are saved to the output directory alongside processed waterfall and vide
                 if overlay_count > 0:
                     self.log_info(f"  Added {overlay_count} mosaic overlay(s)")
             
-            filepath = Path(output_dir) / f"{file_stem}_trackline.kml"
+            filepath = PathlibPath(output_dir) / f"{file_stem}_trackline.kml"
             
             # Try to save - with explicit error catching
             try:
@@ -3684,7 +3617,7 @@ Results are saved to the output directory alongside processed waterfall and vide
             from PIL import Image
             import numpy as np
             
-            filepath = Path(output_dir) / f"{file_stem}_tiles.mbtiles"
+            filepath = PathlibPath(output_dir) / f"{file_stem}_tiles.mbtiles"
             
             # Create MBTiles database
             conn = sqlite3.connect(str(filepath))
@@ -3726,7 +3659,7 @@ Results are saved to the output directory alongside processed waterfall and vide
             self.log_success(f"✓ MBTiles exported to: {filepath}")
             
             # Create HTML viewer
-            html_filepath = Path(output_dir) / f"{file_stem}_map.html"
+            html_filepath = PathlibPath(output_dir) / f"{file_stem}_map.html"
             html_content = f"""<!DOCTYPE html>
 <html>
 <head>
