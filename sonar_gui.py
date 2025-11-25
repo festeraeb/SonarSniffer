@@ -1630,10 +1630,6 @@ Results are saved to the output directory alongside processed waterfall and vide
             self.log_header("Parsing Records...")
             self.log_info("")
             
-            # Detect file format and parse accordingly using universal parser
-            file_ext = PathlibPath(file_path).suffix.lower()
-            self.log_info(f"File format detected: {file_ext}")
-            
             # Suppress debug output from parser
             _old_stdout = sys.stdout
             _old_stderr = sys.stderr
@@ -1641,92 +1637,47 @@ Results are saved to the output directory alongside processed waterfall and vide
             sys.stderr = StringIO()
             
             try:
-                # First try universal parser for all manufacturers
-                if file_ext in ['.slg', '.sl2', '.sl3', '.dat', '.son', '.idx', '.jsf', '.svlog', '.sdf']:
-                    # Multi-manufacturer formats
-                    from universal_sonar_parser import parse_sonar_file
+                # Use unified Rust-accelerated parser for all formats
+                from unified_rust_parser import UnifiedRustParser
+                
+                # Create parser with GUI callback for status updates
+                def parser_status_callback(message: str):
+                    """Callback for parser status updates"""
+                    sys.stdout = _old_stdout  # Temporarily restore to log
+                    self.log_info(f"  Parser: {message}")
+                    sys.stdout = StringIO()  # Re-suppress
+                
+                parser = UnifiedRustParser(file_path, gui_callback=parser_status_callback)
+                
+                # Parse file (handles Rust acceleration with Python fallback)
+                records = parser.parse_all()
+                
+                # Log parser selection info
+                parser_info = parser.get_parser_info()
+                sys.stdout = _old_stdout
+                self.log_info(f"Using: {parser_info['parser_type']} [{parser_info['acceleration']} Acceleration]")
+                if parser_info['fallback_reason']:
+                    self.log_warning(f"  Fallback reason: {parser_info['fallback_reason']}")
+                sys.stdout = StringIO()
+                
+                # Process records with live progress updates
+                for record in records:
+                    if self.cancel_requested:
+                        break
                     
-                    if file_ext in ['.slg', '.sl2', '.sl3']:
-                        format_name = "Navico"
-                    elif file_ext in ['.dat', '.son', '.idx']:
-                        format_name = "Humminbird"
-                    elif file_ext == '.jsf':
-                        format_name = "EdgeTech"
-                    elif file_ext == '.svlog':
-                        format_name = "Cerulean"
-                    elif file_ext == '.sdf':
-                        format_name = "Klein"
-                    else:
-                        format_name = "Unknown"
+                    record_count += 1
+                    records_data.append(record)
                     
-                    self.log_info(f"Parsing {format_name} format ({file_ext}) file...")
-                    result = parse_sonar_file(file_path)
-                    
-                    # Check for errors
-                    if result.errors:
-                        for error in result.errors:
-                            self.log_error(f"  Parser error: {error}")
-                    
-                    # Convert parsed records to standard format
-                    if hasattr(result, 'records') and result.records:
-                        for rec in result.records:
-                            record_count += 1
-                            # Create a record object similar to RSD records
-                            if isinstance(rec, dict):
-                                sonar_data = rec.get('sonar_data', b'')
-                                record = type('Record', (), {
-                                    'offset': rec.get('offset', 0),
-                                    'ch': rec.get('channel_type', rec.get('ch', 0)),
-                                    'lat': rec.get('latitude', rec.get('lat', 0)),
-                                    'lon': rec.get('longitude', rec.get('lon', 0)),
-                                    'depth': rec.get('depth_m', rec.get('depth', 0)),
-                                    'sonar_size': len(sonar_data),
-                                    'sonar_data': sonar_data,  # Store actual sonar data for non-RSD formats
-                                    'sonar_ofs': rec.get('offset', 0),  # File offset (for RSD compatibility)
-                                })()
-                            else:
-                                record = rec  # Already in correct format
-                            records_data.append(record)
-                            
-                            # Update progress every 500 records
-                            if record_count % 500 == 0:
-                                elapsed = (datetime.now() - start_time).total_seconds()
-                                self.update_records(record_count)
-                                self.update_time(elapsed)
-                                self.log_info(f"  Processed {record_count:,} records ({elapsed:.1f}s)")
-                else:
-                    # Default to Garmin RSD format - auto-detect generation
-                    rsd_gen = detect_rsd_generation(file_path)
-                    
-                    # Select appropriate parser based on file generation
-                    if rsd_gen == 'gen2':
-                        parser_to_use = parse_rsd_records_gen2
-                        gen_label = "Gen2 (UHD)"
-                    elif rsd_gen == 'gen3':
-                        parser_to_use = parse_rsd_records_gen2
-                        gen_label = "Gen3 (UHD2)"
-                    elif rsd_gen == 'gen1':
-                        parser_to_use = parse_rsd_records_gen1
-                        gen_label = "Gen1 (Legacy)"
-                    else:
-                        # Default to Gen2 (modern files are usually UHD)
-                        parser_to_use = parse_rsd_records_gen2
-                        gen_label = "Auto-detected (UHD)"
-                    
-                    self.log_info(f"Parsing Garmin RSD file ({gen_label})...")
-                    for record in parser_to_use(file_path):
-                        if self.cancel_requested:
-                            break
-                        
-                        record_count += 1
-                        records_data.append(record)
-                        
-                        # Update progress every 5000 records
-                        if record_count % 5000 == 0:
-                            elapsed = (datetime.now() - start_time).total_seconds()
-                            self.update_records(record_count)
-                            self.update_time(elapsed)
-                            self.log_info(f"  Processed {record_count:,} records ({elapsed:.1f}s)")
+                    # Update progress every 5000 records (or 500 for fast parsers)
+                    update_interval = 5000 if parser_info['acceleration'] == 'Python' else 5000
+                    if record_count % update_interval == 0:
+                        elapsed = (datetime.now() - start_time).total_seconds()
+                        sys.stdout = _old_stdout
+                        self.update_records(record_count)
+                        self.update_time(elapsed)
+                        self.log_info(f"  Processed {record_count:,} records ({elapsed:.1f}s)")
+                        sys.stdout = StringIO()
+            
             finally:
                 sys.stdout = _old_stdout
                 sys.stderr = _old_stderr
