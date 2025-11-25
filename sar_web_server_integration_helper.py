@@ -173,18 +173,18 @@ class WebServerConfigDialog:
             return None
         
         dialog = QDialog(parent)
-        dialog.setWindowTitle("Web Server Configuration")
+        dialog.setWindowTitle("Sonar Sniffer Server Configuration")
         dialog.setMinimumWidth(400)
         
         layout = QVBoxLayout()
         
         # Header
-        header = QLabel("Configure Web Server for Remote Viewing")
+        header = QLabel("Configure Sonar Sniffer by CESARops - Remote Viewing")
         header.setStyleSheet("font-weight: bold; font-size: 12px;")
         layout.addWidget(header)
         
         # Enable checkbox
-        dialog.enable_server = QCheckBox("Enable web server after export")
+        dialog.enable_server = QCheckBox("Enable Sonar Sniffer server after export")
         dialog.enable_server.setChecked(True)
         layout.addWidget(dialog.enable_server)
         
@@ -216,7 +216,7 @@ class WebServerConfigDialog:
         
         # Info box
         info = QLabel(
-            "ℹ️  Web server allows family/team to view sonar data in any "
+            "ℹ️  Sonar Sniffer allows family/team to view sonar data in any "
             "browser without installing software.\n\n"
             "Share the IP address shown after export. Works offline "
             "on same Wi-Fi network."
@@ -282,7 +282,7 @@ class ShareLinkDialog:
             return None
         
         dialog = QDialog(parent)
-        dialog.setWindowTitle("Share Sonar Data")
+        dialog.setWindowTitle("Share Sonar Survey Data")
         dialog.setMinimumWidth(500)
         
         layout = QVBoxLayout()

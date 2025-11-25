@@ -129,7 +129,7 @@ class SARWebServer:
         allow_external: bool = False,
         auto_open_browser: bool = True,
         output_dir: str = 'sar_web_output',
-        server_name: str = 'SonarSniffer - Search & Rescue'
+        server_name: str = 'Sonar Sniffer by CESARops - Search & Rescue'
     ):
         """
         Initialize web server
@@ -506,7 +506,7 @@ class SARWebServer:
 </head>
 <body>
     <div class="header">
-        <h1>🎯 {self.server_name}</h1>
+        <h1>🌊 {self.server_name}</h1>
         <div class="header-info">
             <div class="status-badge active">● Live</div>
             <div>Share: <strong>{local_ip}:{self.port}</strong></div>
@@ -774,7 +774,7 @@ class SARWebServerIntegration:
             allow_external=True,  # Allow remote connections
             auto_open_browser=True,
             output_dir=f"{export_dir}/web",
-            server_name="🎯 Search and Rescue Sonar Viewer"
+            server_name="🌊 Sonar Sniffer by CESARops"
         )
         
         # Set metadata
@@ -834,7 +834,7 @@ if __name__ == '__main__':
     server_c = SARWebServer(
         port=8081,
         allow_external=True,
-        server_name="🎯 Advanced SAR Sonar Viewer"
+        server_name="🌊 Sonar Sniffer by CESARops"
     )
     server_c.set_search_metadata(
         survey_id='SarOp-2025-11-25-002',
