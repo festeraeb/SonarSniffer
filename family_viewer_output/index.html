@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sonar Sniffer by CESARops - Family Viewer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            padding: 40px 30px;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 48px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 18px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .header .subtitle {
+            font-size: 14px;
+            color: #999;
+        }
+        
+        .welcome-banner {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .welcome-banner h2 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        
+        .welcome-banner p {
+            font-size: 16px;
+            opacity: 0.95;
+            line-height: 1.6;
+        }
+        
+        .quick-links {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .quick-link {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            text-decoration: none;
+            color: inherit;
+        }
+        
+        .quick-link:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+        }
+        
+        .quick-link .icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        
+        .quick-link h3 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        
+        .quick-link p {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .content-section {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+            margin-bottom: 30px;
+        }
+        
+        .content-section h2 {
+            font-size: 24px;
+            color: #667eea;
+            margin-bottom: 20px;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 15px;
+        }
+        
+        .content-section h3 {
+            font-size: 18px;
+            color: #333;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        
+        .content-section p {
+            color: #666;
+            line-height: 1.7;
+            margin-bottom: 15px;
+        }
+        
+        .survey-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        .info-box {
+            background: #f8f9fa;
+            padding: 20px;
+            border-left: 4px solid #667eea;
+            border-radius: 8px;
+        }
+        
+        .info-box .label {
+            font-size: 12px;
+            color: #999;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+        
+        .info-box .value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        .feature {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        
+        .feature h4 {
+            color: #667eea;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .feature h4:before {
+            content: "✓";
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        
+        .feature p {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .button {
+            display: inline-block;
+            padding: 12px 30px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .button-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .button-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .button-secondary {
+            background: #f0f0f0;
+            color: #333;
+            border: 2px solid #667eea;
+        }
+        
+        .button-secondary:hover {
+            background: #667eea;
+            color: white;
+        }
+        
+        .footer {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+            margin-top: 30px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .footer p {
+            color: #666;
+            margin-bottom: 10px;
+        }
+        
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        
+        .footer a:hover {
+            text-decoration: underline;
+        }
+        
+        .code-block {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: #333;
+            overflow-x: auto;
+            margin: 15px 0;
+            border-left: 4px solid #667eea;
+        }
+        
+        .badge {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            margin-right: 10px;
+        }
+        
+        .badge-success {
+            background: #4caf50;
+        }
+        
+        .badge-info {
+            background: #2196f3;
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 { font-size: 36px; }
+            .welcome-banner h2 { font-size: 22px; }
+            .content-section { padding: 20px; }
+            .button-group { flex-direction: column; }
+            .button { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌊 Sonar Sniffer</h1>
+            <p>by CESARops - Search and Rescue</p>
+            <div class="subtitle">Family Viewer & Real-time Collaboration Platform</div>
+        </div>
+        
+        <div class="welcome-banner">
+            <h2>Welcome, Family & Search Team</h2>
+            <p>
+                This is your dedicated platform for viewing sonar survey data in real-time.
+                Watch as the team searches, collaborate with remote family, and monitor progress.
+            </p>
+        </div>
+        
+        <div class="quick-links">
+            <a href="map_viewer.html" class="quick-link">
+                <div class="icon">🗺️</div>
+                <h3>Interactive Map</h3>
+                <p>Real-time sonar track visualization with GPS overlay</p>
+            </a>
+            <a href="statistics.html" class="quick-link">
+                <div class="icon">📊</div>
+                <h3>Survey Statistics</h3>
+                <p>Detailed metrics and data analysis</p>
+            </a>
+            <a href="help.html" class="quick-link">
+                <div class="icon">❓</div>
+                <h3>How to Use</h3>
+                <p>Guide for family members and observers</p>
+            </a>
+            <a href="about.html" class="quick-link">
+                <div class="icon">ℹ️</div>
+                <h3>About This Tool</h3>
+                <p>Learn about Sonar Sniffer and CESARops</p>
+            </a>
+        </div>
+        
+        <div class="content-section">
+            <h2>Survey Information</h2>
+            <div class="survey-info">
+                <div class="info-box">
+                    <div class="label">Survey Name</div>
+                    <div class="value">Holloway Search Survey</div>
+                </div>
+                <div class="info-box">
+                    <div class="label">Location</div>
+                    <div class="value">Pacific Northwest</div>
+                </div>
+                <div class="info-box">
+                    <div class="label">Date</div>
+                    <div class="value">November 25, 2025</div>
+                </div>
+                <div class="info-box">
+                    <div class="label">Data Points</div>
+                    <div class="value">3,332</div>
+                </div>
+            </div>
+            
+            <h3>Why Use Sonar Sniffer?</h3>
+            <div class="feature-grid">
+                <div class="feature">
+                    <h4>Real-Time Access</h4>
+                    <p>View sonar survey data as it's being collected, from anywhere</p>
+                </div>
+                <div class="feature">
+                    <h4>Easy to Use</h4>
+                    <p>No special software required - works in any web browser</p>
+                </div>
+                <div class="feature">
+                    <h4>Remote Collaboration</h4>
+                    <p>Share coordinates and observations with the entire search team</p>
+                </div>
+                <div class="feature">
+                    <h4>Multi-Device</h4>
+                    <p>View on desktop, tablet, or smartphone - works everywhere</p>
+                </div>
+                <div class="feature">
+                    <h4>Family Updates</h4>
+                    <p>Keep loved ones informed about search progress</p>
+                </div>
+                <div class="feature">
+                    <h4>Professional Data</h4>
+                    <p>Access the same high-quality sonar data the professionals use</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="content-section">
+            <h2>Getting Started</h2>
+            
+            <h3>Step 1: Access the Map</h3>
+            <p>Click the "Interactive Map" button above to view the sonar survey in real-time.</p>
+            
+            <h3>Step 2: Understand the Display</h3>
+            <div class="feature-grid">
+                <div class="feature">
+                    <h4>Blue Track</h4>
+                    <p>Shows the path the sonar boat traveled during the survey</p>
+                </div>
+                <div class="feature">
+                    <h4>Pin Markers</h4>
+                    <p>Represent specific survey points or areas of interest</p>
+                </div>
+                <div class="feature">
+                    <h4>Zoom Controls</h4>
+                    <p>Use + and - buttons or scroll wheel to zoom in/out</p>
+                </div>
+                <div class="feature">
+                    <h4>Layer Toggle</h4>
+                    <p>Switch between different data visualizations</p>
+                </div>
+            </div>
+            
+            <h3>Step 3: Share Information</h3>
+            <p>Use the coordinate system to communicate with other search team members.</p>
+            <div class="code-block">
+                "I see a strong sonar contact at 44.5°N, 127.5°W"
+            </div>
+            
+            <h3>Step 4: Monitor Progress</h3>
+            <p>Check the statistics page for survey metrics and coverage analysis.</p>
+        </div>
+        
+        <div class="content-section">
+            <h2>About CESARops Integration</h2>
+            <p>
+                <strong>CESARops</strong> is an open-source tool that models how objects drift in the ocean.
+                When combined with Sonar Sniffer surveys, it helps predict search patterns based on:
+            </p>
+            <ul style="margin: 15px 0 15px 20px; color: #666;">
+                <li>Ocean currents and tides</li>
+                <li>Wind patterns</li>
+                <li>Object characteristics (boat, debris, etc.)</li>
+                <li>Last known position</li>
+            </ul>
+            <p>
+                This combination of sonar data and drift modeling gives SAR teams the best possible tools
+                for effective search operations.
+            </p>
+            <div class="button-group">
+                <a href="https://github.com/festeraeb/CESARops" target="_blank" class="button button-primary">
+                    Learn About CESARops
+                </a>
+            </div>
+        </div>
+        
+        <div class="content-section">
+            <h2>Important Information</h2>
+            <div class="feature-grid">
+                <div class="feature" style="background: #fff3cd; border-left-color: #ffc107;">
+                    <h4>Stay Safe</h4>
+                    <p>Always follow SAR team instructions and maintain communication on designated channels</p>
+                </div>
+                <div class="feature" style="background: #d1ecf1; border-left-color: #17a2b8;">
+                    <h4>Data Privacy</h4>
+                    <p>Survey data is shared only within your authorized search team. Protect access credentials.</p>
+                </div>
+                <div class="feature" style="background: #d4edda; border-left-color: #28a745;">
+                    <h4>Technical Support</h4>
+                    <p>Contact your SAR coordinator if you experience technical difficulties</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p><strong>Sonar Sniffer by CESARops</strong> - Search and Rescue Sonar Analysis Platform</p>
+            <p style="font-size: 12px;">
+                Version 2.0 | Generated 2025-11-25 02:43:13 |
+                <a href="https://github.com/festeraeb/SonarSniffer">GitHub</a> |
+                <a href="https://github.com/festeraeb/CESARops">CESARops</a>
+            </p>
+            <p style="font-size: 12px; color: #999;">
+                A tool for Search and Rescue operations. Use responsibly and always follow SAR team protocols.
+            </p>
+        </div>
+    </div>
+</body>
+</html>

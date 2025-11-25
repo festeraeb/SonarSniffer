@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Survey Statistics - Sonar Sniffer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 900px; margin: 0 auto; }
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .header h1 { color: #667eea; margin-bottom: 10px; }
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: white;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .back-link:hover { text-decoration: underline; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .stat-label { color: #999; font-size: 12px; text-transform: uppercase; margin-bottom: 8px; }
+        .stat-value { color: #667eea; font-size: 32px; font-weight: bold; }
+        .info-section {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-top: 20px;
+        }
+        .info-section h2 { color: #667eea; margin-bottom: 15px; }
+        .info-section p { color: #666; line-height: 1.6; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="index.html" class="back-link">← Back to Home</a>
+        
+        <div class="header">
+            <h1>📊 Survey Statistics</h1>
+            <p>Detailed metrics and data analysis</p>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Records</div>
+                <div class="stat-value">3,332</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">GPS Points</div>
+                <div class="stat-value">2,845</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Area Coverage</div>
+                <div class="stat-value">2.5 km²</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Duration</div>
+                <div class="stat-value">8 hours 34 minutes</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Min Depth</div>
+                <div class="stat-value">5 m</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Max Depth</div>
+                <div class="stat-value">150 m</div>
+            </div>
+        </div>
+        
+        <div class="info-section">
+            <h2>What Do These Numbers Mean?</h2>
+            <p>
+                <strong>Total Records:</strong> The number of individual sonar readings taken during the survey.
+                Higher numbers mean more detailed coverage.
+            </p>
+            <p>
+                <strong>GPS Points:</strong> Specific locations where the sonar captured data.
+                These are used to create the map view.
+            </p>
+            <p>
+                <strong>Area Coverage:</strong> The size of the region that was searched.
+                Larger areas require longer survey times.
+            </p>
+            <p>
+                <strong>Depth Range:</strong> The minimum and maximum water depths found in the survey area.
+                Important for understanding the sonar's scanning range.
+            </p>
+        </div>
+    </div>
+</body>
+</html>

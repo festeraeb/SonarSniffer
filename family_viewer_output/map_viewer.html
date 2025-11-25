@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sonar Sniffer - Interactive Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto; }
+        .container { display: flex; height: 100vh; }
+        #map { flex: 1; }
+        .sidebar {
+            width: 300px;
+            background: white;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+            padding: 20px;
+            overflow-y: auto;
+        }
+        .sidebar h2 { color: #667eea; margin-bottom: 15px; }
+        .sidebar p { color: #666; font-size: 14px; line-height: 1.6; margin-bottom: 15px; }
+        .info-item {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            border-left: 3px solid #667eea;
+        }
+        .back-link {
+            display: inline-block;
+            margin-bottom: 15px;
+            color: #667eea;
+            text-decoration: none;
+        }
+        .back-link:hover { text-decoration: underline; }
+        @media (max-width: 768px) {
+            .sidebar { width: 100%; height: auto; }
+            .container { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="map"></div>
+        <div class="sidebar">
+            <a href="index.html" class="back-link">← Back to Home</a>
+            <h2>🗺️ Interactive Map</h2>
+            <p>
+                This map shows the sonar survey track and data points.
+                Zoom in with the buttons or scroll wheel.
+            </p>
+            <div class="info-item">
+                <strong>Blue Line:</strong> Survey track
+            </div>
+            <div class="info-item">
+                <strong>Markers:</strong> GPS points
+            </div>
+            <div class="info-item">
+                <strong>Rectangle:</strong> Survey bounds
+            </div>
+            <p style="margin-top: 20px; font-size: 12px; color: #999;">
+                Powered by Leaflet.js and OpenStreetMap
+            </p>
+        </div>
+    </div>
+    
+    <script>
+        var bounds = [-122.5, 37.5, -122.4, 37.6];
+        var center = [37.55, -122.45];
+        
+        var map = L.map('map').setView([center[0], center[1]], 11);
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }).addTo(map);
+        
+        // Add survey bounds
+        var rectangle = L.rectangle(
+            [[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
+            {
+                color: '#667eea',
+                weight: 2,
+                opacity: 0.8,
+                fillOpacity: 0.1
+            }
+        ).addTo(map);
+        
+        // Add sample points
+        var points = [
+            {lat: 37.55, lng: -122.45},
+            {lat: 37.599999999999994, lng: -122.5},
+            {lat: 37.5, lng: -122.4},
+            {lat: 37.5, lng: -122.5}
+        ];
+        
+        points.forEach(function(point, idx) {
+            L.circleMarker([point.lat, point.lng], {
+                radius: 6,
+                fillColor: '#667eea',
+                color: '#fff',
+                weight: 2,
+                opacity: 0.9,
+                fillOpacity: 0.7
+            }).bindPopup('Survey Point ' + (idx + 1)).addTo(map);
+        });
+        
+        // Draw track
+        L.polyline(points.map(p => [p.lat, p.lng]), {
+            color: '#764ba2',
+            weight: 3,
+            opacity: 0.7
+        }).addTo(map);
+        
+        map.fitBounds(rectangle.getBounds());
+    </script>
+</body>
+</html>

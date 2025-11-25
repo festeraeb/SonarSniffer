@@ -1,0 +1,37 @@
+{
+  "type": "FeatureCollection",
+  "bbox": [
+    -122.5,
+    37.5,
+    -122.4,
+    37.6
+  ],
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Survey Point 1"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.45,
+          37.55
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Survey Point 2"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.46,
+          37.54
+        ]
+      }
+    }
+  ]
+}
