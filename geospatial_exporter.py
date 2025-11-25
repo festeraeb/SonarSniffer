@@ -41,6 +41,15 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
+# GDAL Acceleration (Optional)
+try:
+    from gdal_integration import create_bathymetric_grid, enable_gdal_threading
+    GDAL_ACCELERATION_AVAILABLE = True
+    # Enable multi-threaded GDAL processing
+    enable_gdal_threading(num_threads=4)
+except ImportError:
+    GDAL_ACCELERATION_AVAILABLE = False
+
 
 # ============================================================================
 # DATA STRUCTURES
@@ -225,21 +234,40 @@ class BathymetricProcessor:
             lon_grid = np.linspace(lon_min, lon_max, lon_cells)
             lon_mesh, lat_mesh = np.meshgrid(lon_grid, lat_grid)
             
-            # Interpolate depths using RBF (Radial Basis Function)
-            # Use thin_plate with smooth to avoid overfitting and improve memory efficiency
-            try:
-                rbf = interpolate.Rbf(lons, lats, depths, function='thin_plate', smooth=0.1)
-                depth_grid = rbf(lon_mesh, lat_mesh)
-            except Exception as rbf_error:
-                logging.warning(f"RBF interpolation failed: {rbf_error}. "
-                              f"Falling back to linear interpolation.")
-                # Fallback to linear interpolation (much faster, less memory)
-                from scipy.interpolate import griddata
-                depth_grid = griddata((lons, lats), depths, (lon_mesh, lat_mesh), method='linear')
-                if np.all(np.isnan(depth_grid)):
-                    # If linear fails, use nearest neighbor
-                    logging.warning("Linear interpolation produced all NaN. Using nearest neighbor.")
-                    depth_grid = griddata((lons, lats), depths, (lon_mesh, lat_mesh), method='nearest')
+            # Try GDAL acceleration first (5-10x faster than SciPy)
+            if GDAL_ACCELERATION_AVAILABLE:
+                try:
+                    depth_grid, stats = create_bathymetric_grid(
+                        lons, lats, depths,
+                        lon_mesh, lat_mesh,
+                        use_gdal=True
+                    )
+                    logging.info(f"✓ Bathymetric grid: {stats.method} in {stats.duration_seconds:.2f}s "
+                                f"({len(lons):,} points → {stats.grid_cells:,} cells)")
+                    if stats.speedup_vs_scipy:
+                        logging.info(f"  Speedup: {stats.speedup_vs_scipy:.1f}x vs SciPy RBF")
+                except Exception as gdal_error:
+                    logging.warning(f"GDAL acceleration failed, falling back to SciPy: {gdal_error}")
+                    depth_grid = None
+            else:
+                depth_grid = None
+            
+            # Fallback to SciPy RBF interpolation (slower but reliable)
+            if depth_grid is None:
+                logging.info("Using SciPy RBF interpolation (slower fallback)")
+                try:
+                    rbf = interpolate.Rbf(lons, lats, depths, function='thin_plate', smooth=0.1)
+                    depth_grid = rbf(lon_mesh, lat_mesh)
+                except Exception as rbf_error:
+                    logging.warning(f"RBF interpolation failed: {rbf_error}. "
+                                  f"Falling back to linear interpolation.")
+                    # Fallback to linear interpolation (much faster, less memory)
+                    from scipy.interpolate import griddata
+                    depth_grid = griddata((lons, lats), depths, (lon_mesh, lat_mesh), method='linear')
+                    if np.all(np.isnan(depth_grid)):
+                        # If linear fails, use nearest neighbor
+                        logging.warning("Linear interpolation produced all NaN. Using nearest neighbor.")
+                        depth_grid = griddata((lons, lats), depths, (lon_mesh, lat_mesh), method='nearest')
             
             self.grid_data = {
                 'depths': depth_grid,

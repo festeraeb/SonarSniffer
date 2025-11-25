@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GUI Integration Layer - Sonar Sniffer
-Bridges GUI post-processing with family viewer and tunnel fallbacks.
+Bridges GUI post-processing with web outputs and tunnel fallbacks.
 Provides unified pipeline: Parse → Process → Export → Share
 """
 
@@ -29,32 +29,32 @@ class PipelineConfig:
     generate_kml: bool = True
     generate_mbtiles: bool = True
     generate_dem: bool = True
-    generate_family_viewer: bool = True
+    generate_web_outputs: bool = True
     generate_pathc_tiles: bool = False
-    launch_family_viewer: bool = True
+    launch_web_server: bool = True
     setup_tunnel: bool = False
     tunnel_type: Optional[str] = None  # ngrok, cloudflare, localhost_run, etc.
 
 
-class FamilyViewerIntegration:
-    """Integrates family viewer with sonar processing pipeline"""
+class WebOutputsIntegration:
+    """Integrates web-based outputs with sonar processing pipeline"""
     
     def __init__(self, output_dir: str, survey_name: str = "Sonar Survey"):
-        """Initialize family viewer integration.
+        """Initialize web outputs integration.
         
         Args:
             output_dir: Directory where processed data is stored
-            survey_name: Name of the survey for family viewer
+            survey_name: Name of the survey for web outputs
         """
         self.output_dir = Path(output_dir)
         self.survey_name = survey_name
-        self.family_viewer_dir = self.output_dir / 'family_viewer_output'
-        self.family_viewer_dir.mkdir(parents=True, exist_ok=True)
+        self.web_outputs_dir = self.output_dir / 'web_outputs'
+        self.web_outputs_dir.mkdir(parents=True, exist_ok=True)
     
     def generate_viewer(self, records: List[Dict], kml_path: Optional[Path] = None,
                        dem_path: Optional[Path] = None) -> bool:
         """
-        Generate family-friendly web interface.
+        Generate web-based output interface.
         
         Args:
             records: List of sonar records with lat/lon/depth data
@@ -65,16 +65,16 @@ class FamilyViewerIntegration:
             True if successful
         """
         try:
-            logger.info("Generating family viewer interface...")
+            logger.info("Generating web-based outputs interface...")
             
-            # Import family viewer generator
+            # Import web outputs generator
             from family_survey_viewer import FamilySurveyViewer
             
             # Calculate statistics from records
             stats = self._calculate_statistics(records)
             
             # Generate HTML pages
-            viewer = FamilySurveyViewer(str(self.family_viewer_dir))
+            viewer = FamilySurveyViewer(str(self.web_outputs_dir))
             
             # Generate all pages
             viewer.generate_index()
@@ -86,11 +86,11 @@ class FamilyViewerIntegration:
             # Generate access link page
             self._generate_access_link(stats)
             
-            logger.info(f"✓ Family viewer generated in {self.family_viewer_dir}")
+            logger.info(f"✓ Web outputs generated in {self.web_outputs_dir}")
             return True
         
         except Exception as e:
-            logger.error(f"Family viewer generation failed: {e}")
+            logger.error(f"Web outputs generation failed: {e}")
             return False
     
     def _calculate_statistics(self, records: List[Dict]) -> Dict:
@@ -261,7 +261,7 @@ class FamilyViewerIntegration:
 </body>
 </html>
 """
-        access_file = self.family_viewer_dir / 'SURVEY_RESULTS.html'
+        access_file = self.web_outputs_dir / 'SURVEY_RESULTS.html'
         with open(access_file, 'w', encoding='utf-8') as f:
             f.write(html)
         logger.info(f"✓ Access link generated: {access_file}")
@@ -309,10 +309,10 @@ class TunnelIntegration:
     
     def launch_server(self, output_dir: str) -> bool:
         """
-        Launch family viewer server.
+        Launch web server.
         
         Args:
-            output_dir: Directory containing family_viewer_output
+            output_dir: Directory containing web_outputs
             
         Returns:
             True if successful
@@ -320,11 +320,11 @@ class TunnelIntegration:
         try:
             from integration_server import FamilyViewerServer
             
-            family_viewer_path = Path(output_dir) / 'family_viewer_output'
-            server = FamilyViewerServer(port=self.local_port, output_dir=str(family_viewer_path))
+            web_outputs_path = Path(output_dir) / 'web_outputs'
+            server = FamilyViewerServer(port=self.local_port, output_dir=str(web_outputs_path))
             
             if server.start():
-                logger.info(f"✓ Family viewer server started on port {self.local_port}")
+                logger.info(f"✓ Web server started on port {self.local_port}")
                 
                 # Open browser to local access
                 url = f"http://localhost:{self.local_port}/"
@@ -333,7 +333,7 @@ class TunnelIntegration:
                 
                 return True
             else:
-                logger.error("Failed to start family viewer server")
+                logger.error("Failed to start web server")
                 return False
         
         except Exception as e:
@@ -342,7 +342,7 @@ class TunnelIntegration:
 
 
 class FullPipeline:
-    """Complete sonar processing pipeline from RSD to family viewer"""
+    """Complete sonar processing pipeline from RSD to web outputs"""
     
     def __init__(self, config: PipelineConfig, progress_callback: Optional[Callable] = None):
         """
@@ -379,10 +379,10 @@ class FullPipeline:
             if not self._generate_geospatial():
                 return False
             
-            # Step 4: Generate family viewer
-            if self.config.generate_family_viewer:
-                self.progress_callback("Generating family viewer...", 70)
-                if not self._generate_family_viewer():
+            # Step 4: Generate web outputs
+            if self.config.generate_web_outputs:
+                self.progress_callback("Generating web outputs...", 70)
+                if not self._generate_web_outputs():
                     return False
             
             # Step 5: Setup tunnel (optional)
@@ -391,8 +391,8 @@ class FullPipeline:
                 self._setup_tunnel()
             
             # Step 6: Launch server (optional)
-            if self.config.launch_family_viewer:
-                self.progress_callback("Launching viewer server...", 85)
+            if self.config.launch_web_server:
+                self.progress_callback("Launching web server...", 85)
                 self._launch_server()
             
             self.progress_callback("Pipeline complete!", 100)
@@ -435,14 +435,14 @@ class FullPipeline:
             logger.error(f"Geospatial export failed: {e}")
             return False
     
-    def _generate_family_viewer(self) -> bool:
-        """Generate family viewer."""
+    def _generate_web_outputs(self) -> bool:
+        """Generate web outputs."""
         try:
             if not self.results.get('records'):
-                logger.warning("No records for family viewer")
+                logger.warning("No records for web outputs")
                 return False
             
-            viewer = FamilyViewerIntegration(
+            viewer = WebOutputsIntegration(
                 self.config.output_dir,
                 survey_name="Sonar Survey"
             )
@@ -454,7 +454,7 @@ class FullPipeline:
             )
         
         except Exception as e:
-            logger.error(f"Family viewer generation failed: {e}")
+            logger.error(f"Web outputs generation failed: {e}")
             return False
     
     def _setup_tunnel(self) -> bool:

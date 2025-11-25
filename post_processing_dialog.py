@@ -477,48 +477,48 @@ class PostProcessingDialog:
                               font=('Helvetica', 8), foreground='#666')
         adapt_info.grid(row=5, column=0, sticky='w', pady=(0, 0))
         
-        # ====== FAMILY VIEWER & SHARING ======
+        # ====== WEB-BASED OUTPUTS & SHARING ======
         
-        family_frame = ttk.LabelFrame(scrollable_frame, text="Family Viewer & Sharing", padding="10")
-        family_frame.grid(row=4, column=0, sticky='ew', padx=5, pady=5)
-        family_frame.columnconfigure(0, weight=1)
+        web_frame = ttk.LabelFrame(scrollable_frame, text="Web-Based Outputs & Sharing", padding="10")
+        web_frame.grid(row=4, column=0, sticky='ew', padx=5, pady=5)
+        web_frame.columnconfigure(0, weight=1)
         
-        self.var_family_viewer = tk.BooleanVar(value=True)
-        family_check = ttk.Checkbutton(family_frame, 
-                                      text="📱 Generate Family-Friendly Web Interface", 
-                                      variable=self.var_family_viewer)
-        family_check.grid(row=0, column=0, sticky='w', pady=5)
+        self.var_web_outputs = tk.BooleanVar(value=True)
+        web_check = ttk.Checkbutton(web_frame, 
+                                      text="📱 Generate Web-Based Output Interface", 
+                                      variable=self.var_web_outputs)
+        web_check.grid(row=0, column=0, sticky='w', pady=5)
         
-        family_info = ttk.Label(family_frame, 
-                               text="Creates beautiful HTML pages for families to view survey results",
+        web_info = ttk.Label(web_frame, 
+                               text="Creates beautiful HTML pages to view survey results",
                                font=('Helvetica', 8), foreground='#666')
-        family_info.grid(row=1, column=0, sticky='w', pady=(0, 10))
+        web_info.grid(row=1, column=0, sticky='w', pady=(0, 10))
         
-        self.var_launch_viewer = tk.BooleanVar(value=True)
-        launch_check = ttk.Checkbutton(family_frame, 
-                                      text="🚀 Launch Viewer Server (port 8080)", 
-                                      variable=self.var_launch_viewer)
+        self.var_launch_server = tk.BooleanVar(value=True)
+        launch_check = ttk.Checkbutton(web_frame, 
+                                      text="🚀 Launch Web Server (port 8080)", 
+                                      variable=self.var_launch_server)
         launch_check.grid(row=2, column=0, sticky='w', pady=5)
         
-        launch_info = ttk.Label(family_frame, 
+        launch_info = ttk.Label(web_frame, 
                                text="Opens web server for local/network access (0.0.0.0:8080)",
                                font=('Helvetica', 8), foreground='#666')
         launch_info.grid(row=3, column=0, sticky='w', pady=(0, 10))
         
         self.var_tunnel = tk.BooleanVar(value=False)
-        tunnel_check = ttk.Checkbutton(family_frame, 
-                                      text="🌐 Setup Remote Tunnel (for families far away)", 
+        tunnel_check = ttk.Checkbutton(web_frame, 
+                                      text="🌐 Setup Remote Tunnel (for remote access)", 
                                       variable=self.var_tunnel)
         tunnel_check.grid(row=4, column=0, sticky='w', pady=5)
         
-        tunnel_info = ttk.Label(family_frame, 
+        tunnel_info = ttk.Label(web_frame, 
                                text="Enables public access via ngrok/Cloudflare/SSH (requires external tool)",
                                font=('Helvetica', 8), foreground='#666')
         tunnel_info.grid(row=5, column=0, sticky='w', pady=(0, 10))
         
-        ttk.Label(family_frame, text="Tunnel Type:").grid(row=6, column=0, sticky='w', pady=5)
+        ttk.Label(web_frame, text="Tunnel Type:").grid(row=6, column=0, sticky='w', pady=5)
         self.tunnel_type_var = tk.StringVar(value="localhost_run")
-        tunnel_combo = ttk.Combobox(family_frame, textvariable=self.tunnel_type_var,
+        tunnel_combo = ttk.Combobox(web_frame, textvariable=self.tunnel_type_var,
                                    values=["localhost_run", "ngrok", "cloudflare", "serveo", "tailscale"],
                                    state='readonly', width=20)
         tunnel_combo.grid(row=7, column=0, sticky='w', pady=5)
@@ -705,24 +705,24 @@ class PostProcessingDialog:
                 depth_unit=self.depth_unit_var.get(),
             )
             
-            # Generate family viewer if enabled
-            if self.var_family_viewer.get():
-                self.parent.after(0, lambda: self._update_status("Generating family viewer...", 70))
+            # Generate web-based outputs if enabled
+            if self.var_web_outputs.get():
+                self.parent.after(0, lambda: self._update_status("Generating web-based outputs...", 70))
                 try:
-                    from gui_integration_layer import FamilyViewerIntegration
+                    from gui_integration_layer import WebOutputsIntegration
                     
-                    viewer_integration = FamilyViewerIntegration(
+                    viewer_integration = WebOutputsIntegration(
                         str(options.output_dir),
                         survey_name=options.basename
                     )
                     viewer_integration.generate_viewer(self.records)
-                    self.parent.after(0, lambda: self._update_status("Family viewer generated", 80))
-                    results['family_viewer'] = str(options.output_dir / 'family_viewer_output')
+                    self.parent.after(0, lambda: self._update_status("Web-based outputs generated", 80))
+                    results['web_outputs'] = str(options.output_dir / 'web_outputs')
                 except Exception as e:
-                    self.parent.after(0, lambda msg=str(e): self._update_status(f"Family viewer failed: {msg}", 80))
+                    self.parent.after(0, lambda msg=str(e): self._update_status(f"Web outputs failed: {msg}", 80))
             
-            # Launch viewer server if enabled
-            if self.var_launch_viewer.get() and self.var_family_viewer.get():
+            # Launch web server if enabled
+            if self.var_launch_server.get() and self.var_web_outputs.get():
                 self.parent.after(0, lambda: self._update_status("Launching viewer server...", 85))
                 try:
                     from gui_integration_layer import TunnelIntegration
@@ -737,7 +737,7 @@ class PostProcessingDialog:
                     self.parent.after(0, lambda msg=str(e): self._update_status(f"Server launch failed: {msg}", 90))
             
             # Setup tunnel if enabled
-            if self.var_tunnel.get() and self.var_family_viewer.get():
+            if self.var_tunnel.get() and self.var_web_outputs.get():
                 self.parent.after(0, lambda: self._update_status("Setting up remote tunnel...", 95))
                 try:
                     from gui_integration_layer import TunnelIntegration
@@ -777,7 +777,7 @@ class PostProcessingDialog:
         # Build message
         msg = "Export completed successfully!\n\nGenerated files:\n"
         for fmt, path in results.items():
-            if fmt not in ['family_viewer', 'server', 'tunnel_url']:
+            if fmt not in ['web_outputs', 'server', 'tunnel_url']:
                 msg += f"  • {fmt.upper()}: {path.name}\n"
         
         msg += "\nFiles are ready for:\n"
@@ -785,19 +785,19 @@ class PostProcessingDialog:
         msg += "  • Web mapping (MBTiles)\n"
         msg += "  • GIS analysis (DEM)\n"
         
-        # Add family viewer info
-        if results.get('family_viewer'):
-            msg += "\n✓ Family Viewer Generated\n"
-            msg += f"  Location: {Path(results['family_viewer']).name}/\n"
+        # Add web-based outputs info
+        if results.get('web_outputs'):
+            msg += "\n✓ Web-Based Outputs Generated\n"
+            msg += f"  Location: {Path(results['web_outputs']).name}/\n"
         
         if results.get('server'):
-            msg += f"\n✓ Viewer Server Running\n"
+            msg += f"\n✓ Web Server Running\n"
             msg += f"  URL: {results['server']}/\n"
         
         if results.get('tunnel_url'):
             msg += f"\n✓ Remote Access Ready\n"
             msg += f"  URL: {results['tunnel_url']}/\n"
-            msg += f"  (Share with families away from command center)\n"
+            msg += f"  (Share with remote users)\n"
         
         messagebox.showinfo("Export Complete", msg)
         
