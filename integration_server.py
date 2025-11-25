@@ -2,6 +2,15 @@
 """
 Complete Integration Server - Sonar Sniffer Family Viewer & Path C Outputs
 Serves family-friendly survey viewer with all generated outputs.
+
+Features:
+- Binds to 0.0.0.0:8080 for local network access
+- Optional tunnel fallbacks for remote access:
+  * ngrok (fastest, requires account)
+  * Cloudflare Tunnel (enterprise-grade)
+  * localhost.run (simple SSH, no account)
+  * serveo.net (SSH alternative)
+  * Tailscale (private VPN)
 """
 
 import os
@@ -422,9 +431,11 @@ def main():
         print("\n" + "=" * 70)
         print("FAMILY VIEWER IS RUNNING")
         print("=" * 70)
-        print("\n✓ Local Access:     http://localhost:8080")
-        print("✓ Network Access:   http://192.168.1.100:8080")
+        print("\n✓ Binding Address: 0.0.0.0:8080")
+        print("✓ Local Access:    http://localhost:8080")
+        print("✓ Network Access:  http://192.168.1.100:8080 (replace with your IP)")
         print("✓ Access Link Page: http://localhost:8080/ACCESS_LINK.html")
+        
         print("\nAvailable Pages:")
         print("  - /                 (Home Page)")
         print("  - /map_viewer.html  (Interactive Map)")
@@ -432,6 +443,16 @@ def main():
         print("  - /help.html        (Help & FAQ)")
         print("  - /about.html       (About Sonar Sniffer)")
         print("  - /ACCESS_LINK.html (Access Information)")
+        
+        print("\nOptional Remote Access (Tunnels):")
+        print("  Run: python tunnel_fallbacks.py")
+        print("  Options:")
+        print("    - ngrok (instant public URL)")
+        print("    - Cloudflare Tunnel (enterprise)")
+        print("    - localhost.run (SSH-based)")
+        print("    - serveo.net (SSH alternative)")
+        print("    - Tailscale (private VPN)")
+        
         print("\n" + "=" * 70)
         print("Server running. Press Ctrl+C to stop.")
         print("=" * 70 + "\n")
