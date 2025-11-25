@@ -549,10 +549,14 @@ class SonarGUI:
         # Advanced Rendering
         self.enable_pbr = tk.BooleanVar(value=False)  # PBR rendering (secondary pass)
         self.pbr_mode = tk.StringVar(value="DIFFERENTIAL")  # Best all-around for sonar
+        self.pbr_quality = tk.StringVar(value="MEDIUM")  # Quality level: LOW, MEDIUM, HIGH
         
         # Target Detection
         self.enable_target_detection = tk.BooleanVar(value=False)  # Identify rocks, wrecks, anomalies
         self.target_detection_sensitivity = tk.DoubleVar(value=0.5)  # 0.0-1.0
+        
+        # Coordinate Overlay
+        self.enable_coordinate_overlay = tk.BooleanVar(value=False)  # Overlay coordinates on mosaics
         
         # Data loading for post-processing
         self.loaded_data = None  # Pre-parsed CSV/JSON data
@@ -2027,10 +2031,9 @@ Results are saved to the output directory alongside processed waterfall and vide
             self.log_info("")
             self.log_header("Generating Video/Waterfall...")
             self.log_info(f"Processing {len(records_data)} records for waterfall frames")
-            self.log_info(f"Filtering for side-scan channels only (4=Port, 5=Starboard)")
             self.log_info(f"Using memory-aware encoding (will stream frames if needed)")
             
-            # Extract sonar payloads from records (side-scan channels 4 and 5 only)
+            # Extract sonar payloads from records (side-scan channels only)
             # Note: Process ALL records, not just first 600, to get complete side-scan data
             rows = []
             row_channels = []  # Track which channel each row came from
@@ -2065,22 +2068,39 @@ Results are saved to the output directory alongside processed waterfall and vide
                 ch = getattr(rec, 'ch', None) or getattr(rec, 'channel_id', None)
                 self.log_info(f"  ch={ch}, sonar_size={getattr(rec, 'sonar_size', 'N/A')}, sonar_ofs={getattr(rec, 'sonar_ofs', 'N/A')}, lat={getattr(rec, 'lat', 'N/A')}, lon={getattr(rec, 'lon', 'N/A')}")
             
-            # Check if channels 4/5 have ANY sonar data
-            ch4_sonar = ch_has_sonar.get(4, 0)
-            ch5_sonar = ch_has_sonar.get(5, 0)
-            total_sidescan_sonar = ch4_sonar + ch5_sonar
-            self.log_info(f"Side-scan sonar data: Ch4={ch4_sonar} records, Ch5={ch5_sonar} records, Total={total_sidescan_sonar}")
+            # Determine file generation and appropriate channels to use
+            # Different RSD generations use different channel IDs
+            rsd_gen = detect_rsd_generation(file_path)
             
-            # Determine which channels to use for side-scan (use channels with sonar data)
-            # Prefer channels 4/5 (standard side-scan), but fall back to any channel with sonar data
-            if total_sidescan_sonar > 0:
-                side_scan_channels = [4, 5]
-                self.log_info(f"Using standard side-scan channels: {side_scan_channels}")
+            # Import channel mapping helper
+            try:
+                from uhd2_channel_mapping import get_sidescan_channels
+                expected_channels = get_sidescan_channels(rsd_gen)
+            except ImportError:
+                # Fallback if module not available
+                expected_channels = [4, 5] if rsd_gen != 'gen3' else [160, 12, 14, 32, 201]
+            
+            # Log what we're looking for
+            if rsd_gen == 'gen3':
+                self.log_info(f"File format: UHD2 (Gen3) - Looking for channels: {expected_channels}")
+            elif rsd_gen == 'gen2':
+                self.log_info(f"File format: UHD (Gen2) - Looking for channels: {expected_channels}")
             else:
-                # No data in channels 4/5, use whichever channel has the most sonar data
-                side_scan_channels = [max(ch_has_sonar, key=ch_has_sonar.get)] if ch_has_sonar else []
-                if side_scan_channels:
-                    self.log_warning(f"No data in channels 4/5, using channel {side_scan_channels[0]} instead (has {ch_has_sonar[side_scan_channels[0]]} records with sonar data)")
+                self.log_info(f"File format: CHIRP (Gen1) - Looking for channels: {expected_channels}")
+            
+            # Check which expected channels have sonar data
+            channels_with_sonar = [ch for ch in expected_channels if ch_has_sonar.get(ch, 0) > 0]
+            
+            # Determine which channels to use for side-scan
+            # Prefer expected channels with sonar data, fall back to any channel with sonar data
+            if channels_with_sonar:
+                side_scan_channels = channels_with_sonar
+                self.log_info(f"Using detected side-scan channels: {side_scan_channels}")
+            elif ch_has_sonar:
+                # No expected channels have data, use whichever has the most sonar data
+                side_scan_channels = [max(ch_has_sonar, key=ch_has_sonar.get)]
+                self.log_warning(f"Expected channels {expected_channels} have no data.")
+                self.log_warning(f"Using channel {side_scan_channels[0]} instead (has {ch_has_sonar[side_scan_channels[0]]} records with sonar data)")
             
             # Extract sonar rows with filtering
             # Track channel 4 (port) and channel 5 (starboard) separately for side-by-side display
@@ -2108,6 +2128,11 @@ Results are saved to the output directory alongside processed waterfall and vide
                 
                 # Handle both 'ch' and 'channel_id' attribute names
                 ch = getattr(rec, 'ch', None) or getattr(rec, 'channel_id', None)
+                
+                # Check if this record is in the side-scan channels we're looking for
+                if ch not in side_scan_channels:
+                    skipped_wrong_channel += 1
+                    continue
                 
                 # Check if record has sonar data
                 if not hasattr(rec, 'sonar_size') or not rec.sonar_size or rec.sonar_size <= 0:
@@ -2150,19 +2175,22 @@ Results are saved to the output directory alongside processed waterfall and vide
                         row = arr
                     
                     # Store in appropriate channel list
-                    if ch == 4:
-                        ch4_rows.append(row)
-                    elif ch == 5:
-                        ch5_rows.append(row)
+                    # For dual-channel display (legacy Gen1/Gen2), separate channels 4/5
+                    if len(side_scan_channels) == 2 and 4 in side_scan_channels and 5 in side_scan_channels:
+                        # Gen1/Gen2 side-by-side display
+                        if ch == 4:
+                            ch4_rows.append(row)
+                        elif ch == 5:
+                            ch5_rows.append(row)
                     else:
-                        # For other channels, append to rows directly (single-channel mode)
+                        # Single channel or Gen3 (UHD2) - append to rows directly
                         rows.append(row)
                         row_channels.append(ch)
                     
                     extracted_count += 1
                     
                     if extracted_count % 50 == 0:
-                        self.log_info(f"  Extracted {extracted_count} records (Ch4: {len(ch4_rows)}, Ch5: {len(ch5_rows)})")
+                        self.log_info(f"  Extracted {extracted_count} records from channel(s) {side_scan_channels}")
                 
                 except Exception as e:
                     skipped_read_error += 1
@@ -3014,7 +3042,17 @@ Results are saved to the output directory alongside processed waterfall and vide
             messagebox.showerror("Export Error", str(e))
     
     def export_kml(self, default_name):
-        """Export results to KML (Google Earth format) with mosaic overlays"""
+        """Export results to optimized KML (Google Earth) with intelligent point decimation and layer management"""
+        try:
+            from optimized_kml_integration import export_kml_optimized
+            export_kml_optimized(self, default_name)
+        except ImportError:
+            # Fallback to original if optimized module not available
+            self.log_error("Optimized KML module not found, falling back to basic export")
+            self._export_kml_basic(default_name)
+    
+    def _export_kml_basic(self, default_name):
+        """Fallback: Export results to basic KML (Google Earth format) with mosaic overlays"""
         if not self.last_results.get('include_kml', False):
             messagebox.showwarning("KML Disabled", "KML generation was not enabled in processing options")
             return
