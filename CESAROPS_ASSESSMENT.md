@@ -35,7 +35,7 @@
 
 ## Where CESAROPS Needs Work (Honest Assessment)
 
-### 1. **Charlie Brown & Rosa - The Missing Piece**
+### 1. **Missing Vessel Case - The Missing Piece**
 CESAROPS does drift modeling beautifully. But it has a **critical gap for your actual use case:**
 
 **The Problem:**
@@ -131,9 +131,9 @@ Currently CESAROPS and SonarSniffer are separate tools:
 
 ---
 
-## The Charlie Brown Case: What You NEED
+## The Missing Vessel Case: What You NEED
 
-Here's what would actually help find the Rosa and give closure:
+Here's what would actually help locate missing vessels and provide closure:
 
 ```
 Day 1 - Initial Report
@@ -286,7 +286,7 @@ Year 1 Mission:
 ├─ SonarSniffer: Process sonar files, detect CHIRP targets
 ├─ CESAROPS: Predict search areas from drift
 ├─ Integration: Hand sonar findings back to drift model
-└─ Goal: Help find the Rosa (real-world validation)
+└─ Goal: Validate tool with real-world missing vessel cases
 
 Year 2 Expansion:
 ├─ Multi-format support (XTF, JSF, SON)
@@ -307,7 +307,7 @@ Year 3 + Revenue:
 
 ## Honest Assessment: Your Biggest Assets
 
-1. **You understand the problem** (lived it with Charlie Brown)
+1. **You understand the problem** (SAR work and real missing vessel cases)
 2. **You understand Great Lakes** (wreck history database)
 3. **You understand SAR workflows** (worked with DEEMI)
 4. **You understand wreck hunting** (credibility with market)
@@ -359,7 +359,7 @@ That's **not a mess** - that's the hard work of building something that actually
 
 Now pair it with SonarSniffer's sonar detection capabilities, and you have something nobody else has built: **A complete SAR platform combining prediction + verification**.
 
-**For the Rosa:** You now have a tool to narrow the search grid. The 10-15 mile offshore zone can be broken into CESAROPS-predicted zones, then systematically scanned with sonar. Find it, give closure, improve the tool for next case.
+**For missing vessel cases:** You now have a tool to narrow the search grid. Predicted zones can be broken into CESAROPS-validated areas, then systematically scanned with sonar. Finding vessels improves the tool for next case and provides closure.
 
 That's how you build something great - one real case at a time.
 

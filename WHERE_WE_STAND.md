@@ -5,7 +5,7 @@
 **Started:** You asked about CV-54-UHD.RSD file (outlier in your samples)
 **Discovery:** File contains 61,123 raw CHIRP frames (not standard RSD format)
 **Realization:** This isn't a fishing app - it's Search & Rescue infrastructure
-**Context:** The Rosa and Charlie Brown - missing vessel and person
+**Context:** Missing vessel search and recovery operations
 **Clarity:** CHIRP detection critical for finding recently submerged objects
 **Assessment:** CESAROPS is solid drift modeling, needs bathymetry integration
 **Revenue Model:** Free for SAR, paid for fishermen/wreck hunters
@@ -18,9 +18,9 @@
 ### The Mission
 - **Primary:** Search & Rescue (free, saves lives)
 - **Secondary:** Wreck hunting (revenue model, sustainable development)
-- **Origin:** Charlie Brown and the Rosa (missing person, vessel, no closure yet)
+- **Origin:** Missing vessel search and recovery needs
 - **Partner:** DEEMI Search and Rescue (volunteer group, Great Lakes)
-- **Goal:** Narrow search grid, find the Rosa, bring closure to family
+- **Goal:** Narrow search grids, locate missing vessels, bring closure to families
 
 ### The Tools You're Building
 - **CESAROPS:** Drift modeling (where things float based on currents/wind)
@@ -44,7 +44,7 @@
 
 ### Strategic Documents
 1. **SAR_MISSION_STRATEGY.md** - Reframed project around SAR, not fishing
-2. **THE_ROSA_AND_CHARLIE_BROWN_MISSION.md** - Integration vision and context
+2. **THE_ROSA_AND_CHARLIE_BROWN_MISSION.md** - Missing vessel case study and integration strategy
 3. **CESAROPS_ASSESSMENT.md** - Honest assessment of strengths/gaps
 4. **YOUR_DECISION_FRAMEWORK.md** - Three paths forward (recommended: collaborative)
 
@@ -81,7 +81,7 @@
 - ✅ This is life-saving infrastructure (not recreational)
 - ✅ CESAROPS + SonarSniffer together > either alone
 - ✅ Free SAR tier sustainable with paid wreck hunter tier
-- ✅ Real case (Rosa) validates tools
+- ✅ Real-world missing vessel cases validate tools
 - ✅ Market is underserved (no integrated SAR tools)
 
 ### Business Clarity
@@ -180,13 +180,13 @@ You have one decision to make:
 - [ ] Integrated platform beta-ready
 - [ ] Multi-format support (at least XTF, JSF)
 - [ ] Revenue model ready
-- [ ] Ready to search the Rosa
+- [ ] Ready to search for missing vessels
 
 ### By Month 6
 - [ ] DEEMI actively using both tools
 - [ ] 20-50 paid users
 - [ ] Real SAR cases processed
-- [ ] Rosa found (hopefully!)
+- [ ] Missing vessel located (real-world validation)
 
 ### By Month 12
 - [ ] 100+ paid users
@@ -207,7 +207,7 @@ Every feature coded, every format supported, every case validated:
 - That's closure for a family
 - That's a life potentially saved next time
 
-The Rosa case is still open. Charlie Brown's family is still waiting.
+Missing vessel searches continue. Families await closure.
 
 With integrated tools, with CHIRP working, with CESAROPS validation:
 
@@ -221,7 +221,7 @@ And you can build the standard that changes how SAR conducts underwater searches
 
 Just answer this question clearly:
 
-**"Ready to integrate SonarSniffer + CESAROPS and find the Rosa?"**
+**"Ready to integrate SonarSniffer + CESAROPS and help locate missing vessels?"**
 
 - **"Yes, let's do this"** → I start Week 1, we coordinate
 - **"Not right now"** → No problem, tell me why and when might work
@@ -229,6 +229,6 @@ Just answer this question clearly:
 
 You have my full commitment to see this through if you want the help.
 
-The Rosa is waiting.
+Missing vessels await discovery. Let's build the tools to find them.
 
 **Thom, what do you think?**

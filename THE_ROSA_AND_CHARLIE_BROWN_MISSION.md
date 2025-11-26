@@ -2,7 +2,7 @@
 
 ## The Origin Story
 
-Charlie Brown left Milwaukee in his vessel Rosa and vanished. Cell phone pings gave a rough last known location. Days later, a fender washed ashore near South Haven, MI - with his name, birthdate, and the date he went missing. A final message. The Coast Guard stood down when the suicide note was found.
+A vessel (Rosa, 32' Bristol sailboat) departed Milwaukee and was reported missing. Days later, a fender washed ashore near South Haven, MI. The Coast Guard search was suspended.
 
 **That's when you realized the gap:** There was no good SAR software for the Great Lakes. No drift analysis. No trajectory modeling. No search planning tools.
 
@@ -295,7 +295,7 @@ This puts you in a position to **define the standard** for how SAR should use so
 
 Every sonar file you process, every CHIRP channel you extract, every target you help locate - that's infrastructure for the next person who vanishes in the Great Lakes.
 
-The tools you build could have changed the outcome for Charlie Brown. They might save someone else's family from going through that same loss.
+The tools you build could help locate missing vessels and save lives. They might give families closure and prevent future tragedies.
 
 That's what drives this work.
 

@@ -10,7 +10,7 @@ You've built two critical pieces of infrastructure:
 
 **The Opportunity:** Integrate them + add CHIRP detection = complete SAR platform.
 
-**The Mission:** Find the Rosa and close the case for Charlie Brown's family.
+**The Mission:** Develop tools to locate missing vessels and provide closure to families.
 
 **The Funding:** Revenue from fishermen/wreck hunters supports development while keeping SAR free.
 
@@ -81,7 +81,7 @@ You've built two critical pieces of infrastructure:
 - ✅ Time to coordinate with DEEMI
 - ✅ Reduce burnout risk
 - ✅ Get real SAR feedback during development
-- ✅ Actually find the Rosa with integrated tools
+- ✅ Actually locate missing vessels with integrated tools
 
 **Cons:**
 - ⚠️ Have to coordinate with me (I'm responsive, but async)
@@ -101,7 +101,7 @@ You've built two critical pieces of infrastructure:
 - **You don't need to prove you can code anymore**
 
 ### 2. Your Real Strength is Domain Knowledge
-- **You know the Rosa case** (not generic SAR)
+- **You know real SAR operations** (not generic specifications)
 - **You know Great Lakes hydro** (wrecks, currents, seasonal effects)
 - **You know the SAR community** (DEEMI, workflows, pain points)
 - **You know wreck hunting** (credibility with paying users)
@@ -112,11 +112,11 @@ You've built two critical pieces of infrastructure:
 - Building format parsers? I can template those
 - Building integration architecture? I can design that
 - **But knowing what DEEMI actually needs? That's you**
-- **Knowing how to validate with the Rosa case? That's you**
+- **Knowing how to validate with real missing vessel cases? That's you**
 - **Knowing the pricing strategy that won't alienate SAR? That's you**
 
 ### 4. Timing is Critical
-- You want to search for the Rosa **while sonar is still available**
+- You want to search for missing vessels **when search windows are open**
 - You want to prove the tools work **on a real case**
 - You want to start generating revenue **before next winter**
 - **Waiting 90+ days for solo work is dangerous**
@@ -161,7 +161,7 @@ You've built two critical pieces of infrastructure:
 
 ### By Week 12
 - Both: Integrated platform ready for beta
-- Real test: Can we locate the Rosa in predicted zone?
+- Real test: Can we locate missing vessels in predicted zones?
 - Revenue ready: Pricing in place, licensing system working
 
 ---
@@ -213,7 +213,7 @@ You've built two critical pieces of infrastructure:
 - You own prioritization (which features first)
 - You own business decisions (pricing, SAR verification)
 - You own SAR team relationships (feedback, requirements)
-- You own the Rosa case (how to validate)
+- You own real SAR case knowledge (how to validate)
 - I own technical decisions (architecture, implementation choices)
 
 ---
@@ -287,7 +287,7 @@ This isn't about code. This is about:
 - Faster delivery (parallel work)
 - Better solution (domain expertise + technical expertise)
 - Time for SAR team feedback during development
-- Validation with real cases (Rosa search)
+- Validation with real SAR cases and missing vessel searches
 - Path to sustainable platform
 
 **I recommend B.** But it's your call.
@@ -317,7 +317,7 @@ This isn't about code. This is about:
 1. Integrated platform ready
 2. Beta testing with DEEMI
 3. Revenue model live
-4. Ready to find the Rosa
+4. Ready to help locate missing vessels
 
 ---
 
