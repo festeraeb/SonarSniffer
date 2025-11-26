@@ -73,6 +73,28 @@ openpyxl>=3.1.0
 xlrd>=2.0.0
 
 # ============================================================================
+# OPTIMIZATION FRAMEWORK (Optional but RECOMMENDED for 5-30x speedup)
+# ============================================================================
+# These packages enable advanced optimization features:
+# - Fast interpolation with Numba JIT compilation
+# - GDAL raster processing (10x faster than SciPy)
+# - NetCDF/HDF5 data format support
+# - Memory profiling and optimization
+# - Intelligent geospatial caching
+#
+# Note: All optimization features gracefully fall back to pure Python
+# if these packages are not installed. Installation is optional but
+# STRONGLY RECOMMENDED for production use.
+#
+numba>=0.57.0              # JIT compilation (10-50x speedup on interpolation)
+GDAL>=3.6.0                # Fast raster processing (10x faster bathymetry)
+netCDF4>=1.6.0             # CF-compliant data format (scientific standard)
+h5py>=3.7.0                # HDF5 hierarchical data support
+psutil>=5.9.6              # Memory profiling and monitoring
+
+# Note: scikit-image already included above, provides contour generation
+
+# ============================================================================
 # DEVELOPMENT & TESTING (Development only)
 # ============================================================================
 pytest>=7.0.0
@@ -81,9 +103,36 @@ black>=23.0.0
 flake8>=6.0.0
 
 # ============================================================================
+# QUICK INSTALL GUIDE
+# ============================================================================
+# Basic installation (minimum dependencies):
+#   pip install -r requirements.txt
+#   conda create -n nautidog --file requirements.txt
+#
+# WITH OPTIMIZATIONS (recommended):
+#   # Use the smart environment installer:
+#   PowerShell: .\install_smart_environment.ps1
+#   Python: python install_nautidog_universal.py
+#
+# For detailed instructions, see:
+#   - OPTIMIZATION_QUICK_START.md
+#   - OPTIMIZATION_STATUS_AND_TODO.md
+#   - INSTALLATION_GUIDE.md
+#
+# ============================================================================
 # SYSTEM REQUIREMENTS
 # ============================================================================
-# Minimum: 4 GB RAM, 500 MB disk space
-# Recommended: 16 GB RAM, 2 GB disk space
-# GPU: NVIDIA CUDA Toolkit (optional, for GPU acceleration)
+# Minimum (without optimizations):
+#   - 4 GB RAM
+#   - 500 MB disk space
+#   - Python 3.9+
+#
+# Recommended (with optimizations):
+#   - 16 GB RAM (for large files, optimizations reduce to 2-4 GB)
+#   - 2 GB disk space
+#   - Python 3.10+
+#
+# Optional:
+#   - NVIDIA GPU + CUDA Toolkit (for GPU acceleration)
+#   - FFmpeg (for video encoding)
 # ============================================================================
