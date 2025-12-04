@@ -1,0 +1,110 @@
+# Large data files - exclude from repository
+*.RSD
+*.mbtiles
+*.kml
+*.mp4
+*.png
+*.csv
+*.json
+
+# Garmin/firmware analysis files
+Garmin/
+Garmin-Rsd-Sidescan/
+HummSucker/
+HistoryofCESARSNIFFERBAGFILE/
+gpsmap_integration/
+manufacturer_parsers/
+garmin_parsers_deprecated/
+rsd_parser_rust/
+
+# Build outputs and temporary files
+test_*/
+temp/
+logs/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.conda/
+*.egg-info/
+dist/
+build/
+target/
+Cargo.lock
+pipeline_test_output/
+uploads/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Firmware and binary files
+firmware/
+firmware/*.bin
+firmware/*.exe
+*.dll
+*.exe
+*.so
+*.dylib
+*.o
+*.a
+*.lib
+
+# Logs and debug files
+*.log
+*.err
+debug_*.py
+diagnostic_*.py
+
+# Test and analysis outputs
+test_results.txt
+uhd2_processing_results.txt
+pipeline_results.txt
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Generated data files
+gcd_struct.txt
+gcd_struct (1).txt
+sblm4_july2022.txt
+sblm4_july2022.txt.gz
+Navico_SLG_Extracted.txt
+edgetech_native_file_format_clip.jsf
+general_xtf_clip_from_edgetech_4225i.xtf
+VizslaLogo.jpg
+vizsla_echolocation_logo.svg
+nautidog_logo.svg
+
+# Analysis and exploratory scripts (numbered versions)
+*_analysis.py
+*_test.py
+*_debug.py
+*_diagnostic*.py
+*_verify*.py
+*_check*.py
+*_examine*.py
+*_inspect*.py
+*_extract*.py
+*_analyze*.py
+
+# Sonar release packages
+SonarSniffer-Release/
+
+# Keep analysis scripts but exclude large outputs
+comprehensive_output/
+emulator_output/
+exports/
+
+# Except - keep these important files
+!SAR_PLATFORM*
+!EMAIL_SURVEY_TEMPLATE.md
+!sar_platform_core/
+!sar_platform.db
+parsed_output/
+gps_output/
