@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAR Platform Survey - Interactive Form</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 3px solid #1a5490;
+            padding-bottom: 20px;
+        }
+        
+        .header h1 {
+            color: #1a5490;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .info-box {
+            background-color: #e8f0f8;
+            border-left: 4px solid #1a5490;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        
+        .section {
+            margin-bottom: 40px;
+            page-break-inside: avoid;
+        }
+        
+        .section-title {
+            background-color: #2e5090;
+            color: white;
+            padding: 12px 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        
+        .question {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #fafafa;
+            border-radius: 4px;
+        }
+        
+        .question-title {
+            color: #2e5090;
+            font-weight: bold;
+            margin-bottom: 10px;
+            font-size: 15px;
+        }
+        
+        .question-subtitle {
+            color: #666;
+            font-size: 13px;
+            font-style: italic;
+            margin-bottom: 10px;
+        }
+        
+        .option {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 8px;
+            gap: 10px;
+        }
+        
+        .option input[type="checkbox"] {
+            margin-top: 3px;
+            cursor: pointer;
+            width: 18px;
+            height: 18px;
+        }
+        
+        .option input[type="radio"] {
+            margin-top: 3px;
+            cursor: pointer;
+        }
+        
+        .option label {
+            cursor: pointer;
+            flex-grow: 1;
+            padding-top: 2px;
+        }
+        
+        .text-input {
+            border: none;
+            border-bottom: 1px solid #999;
+            padding: 4px;
+            font-family: Arial, sans-serif;
+            width: 100%;
+            margin: 5px 0;
+        }
+        
+        .text-input:focus {
+            outline: none;
+            border-bottom: 2px solid #1a5490;
+        }
+        
+        .option input[type="text"] {
+            margin-left: 25px;
+            flex-grow: 1;
+        }
+        
+        .textarea-box {
+            width: 100%;
+            height: 80px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: Arial, sans-serif;
+            font-size: 13px;
+            margin: 8px 0;
+        }
+        
+        .textarea-box:focus {
+            outline: none;
+            border: 2px solid #1a5490;
+        }
+        
+        .info-toggle {
+            display: inline-block;
+            cursor: pointer;
+            color: #1a5490;
+            font-weight: bold;
+            font-size: 14px;
+            margin-left: 8px;
+            user-select: none;
+        }
+        
+        .info-toggle:hover {
+            text-decoration: underline;
+        }
+        
+        .question-info {
+            display: none;
+            background-color: #f0f4f8;
+            border-left: 3px solid #1a5490;
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 3px;
+            font-size: 13px;
+            color: #555;
+            line-height: 1.5;
+        }
+        
+        .question-info.show {
+            display: block;
+        }
+        
+        .sub-options {
+            margin-left: 30px;
+            padding: 10px;
+            background-color: white;
+            border-left: 2px solid #ddd;
+            border-radius: 4px;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #ddd;
+        }
+        
+        button {
+            padding: 10px 30px;
+            font-size: 14px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+        
+        .btn-print {
+            background-color: #4CAF50;
+            color: white;
+        }
+        
+        .btn-print:hover {
+            background-color: #45a049;
+        }
+        
+        .btn-reset {
+            background-color: #f44336;
+            color: white;
+        }
+        
+        .btn-reset:hover {
+            background-color: #da190b;
+        }
+        
+        .btn-submit {
+            background-color: #1a5490;
+            color: white;
+        }
+        
+        .btn-submit:hover {
+            background-color: #0d3066;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+        }
+        
+        table th, table td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        
+        table th {
+            background-color: #f0f0f0;
+            font-weight: bold;
+        }
+        
+        table input {
+            width: 100%;
+            padding: 5px;
+            border: none;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 2px solid #ddd;
+            color: #666;
+            font-size: 12px;
+        }
+        
+        .footer-highlight {
+            background-color: #fff3cd;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        
+        @media print {
+            body {
+                background-color: white;
+                padding: 0;
+            }
+            
+            .container {
+                box-shadow: none;
+                padding: 0;
+                max-width: 100%;
+            }
+            
+            .button-group {
+                display: none;
+            }
+            
+            .section {
+                page-break-inside: avoid;
+            }
+            
+            input[type="checkbox"], input[type="radio"] {
+                print-color-adjust: exact;
+                -webkit-print-color-adjust: exact;
+            }
+        }
+    </style>
+</head>
+<body>
+    <form id="surveyForm" name="surveySurvey">
+        <div class="container">
+            <!-- Header -->
+            <div class="header">
+                <h1>SAR Platform Survey</h1>
+                <p><strong>Community Input for Platform Development</strong></p>
+                <p>November 26, 2025</p>
+            </div>
+            
+            <div class="info-box">
+                <p><strong>Purpose:</strong> Gather feedback from SAR teams, agencies, and coordinators to prioritize features and modules for the SAR Platform Core System.</p>
+                <p><strong>Time to Complete:</strong> 10-15 minutes | <strong>Deadline:</strong> December 31, 2025 (Midnight)</p>
+                <p style="margin-top: 10px; font-size: 13px;"><strong>💡 Tip:</strong> Click the <strong>ℹ️ More Info</strong> button next to each question for guidance, context, or clarification on what we're looking for.</p>
+            </div>
+            
+            <!-- SECTION 1 -->
+            <div class="section">
+                <div class="section-title">SECTION 1: Your SAR Discipline & Organization</div>
+                
+                <div class="question">
+                    <div class="question-title">Q1.1: What is your primary SAR discipline? (Select all that apply)
+                        <span class="info-toggle" onclick="toggleInfo('info_q1_1')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q1_1">
+                        <strong>Help:</strong> Select the discipline(s) your team primarily operates in. This helps us understand your operational context and data needs.
+                    </div>
+                    <div class="option"><input type="checkbox" id="q1_1a" name="q1_1"><label for="q1_1a">Water Search & Rescue (boats, sonar, divers)</label></div>
+                    <div class="option"><input type="checkbox" id="q1_1b" name="q1_1"><label for="q1_1b">Land Search & Rescue (K9, volunteers, terrain)</label></div>
+                    <div class="option"><input type="checkbox" id="q1_1c" name="q1_1"><label for="q1_1c">Aerial Search (drones, helicopters, fixed-wing)</label></div>
+                    <div class="option"><input type="checkbox" id="q1_1d" name="q1_1"><label for="q1_1d">Dive/Underwater Operations</label></div>
+                    <div class="option"><input type="checkbox" id="q1_1e" name="q1_1"><label for="q1_1e">Equine/Horse teams</label></div>
+                    <div class="option"><input type="checkbox" id="q1_1f" name="q1_1"><label for="q1_1f">Incident Command/Coordination</label></div>
+                    <div class="option"><input type="checkbox" id="q1_1g" name="q1_1"><label for="q1_1g">Dispatch/911 Integration</label></div>
+                    <div class="option"><input type="checkbox" id="q1_1h" name="q1_1"><label for="q1_1h">Other: <input type="text" class="text-input" name="q1_1_other" style="width: 300px;"></label></div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q1.2: Organization type
+                        <span class="info-toggle" onclick="toggleInfo('info_q1_2')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q1_2">
+                        <strong>Help:</strong> Tell us your organization's structure. Government agencies, volunteers, and contractors have different workflows and resource constraints.
+                    </div>
+                    <div class="option"><input type="radio" id="q1_2a" name="q1_2" value="county"><label for="q1_2a">County/Municipal SAR</label></div>
+                    <div class="option"><input type="radio" id="q1_2b" name="q1_2" value="state"><label for="q1_2b">State/Provincial Agency</label></div>
+                    <div class="option"><input type="radio" id="q1_2c" name="q1_2" value="federal"><label for="q1_2c">Federal Agency (USCG, NPS, etc)</label></div>
+                    <div class="option"><input type="radio" id="q1_2d" name="q1_2" value="volunteer"><label for="q1_2d">Volunteer Organization</label></div>
+                    <div class="option"><input type="radio" id="q1_2e" name="q1_2" value="private"><label for="q1_2e">Private contractor</label></div>
+                    <div class="option"><input type="radio" id="q1_2f" name="q1_2" value="university"><label for="q1_2f">University/Research</label></div>
+                    <div class="option"><input type="radio" id="q1_2g" name="q1_2" value="other"><label for="q1_2g">Other: <input type="text" class="text-input" name="q1_2_other" style="width: 300px;"></label></div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q1.3: Team size
+                        <span class="info-toggle" onclick="toggleInfo('info_q1_3')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q1_3">
+                        <strong>Help:</strong> Smaller teams may have different resource constraints than larger organizations. This helps us design scalable workflows.
+                    </div>
+                    <div class="option"><input type="radio" id="q1_3a" name="q1_3" value="solo"><label for="q1_3a">Solo operator</label></div>
+                    <div class="option"><input type="radio" id="q1_3b" name="q1_3" value="2-5"><label for="q1_3b">2-5 people</label></div>
+                    <div class="option"><input type="radio" id="q1_3c" name="q1_3" value="6-15"><label for="q1_3c">6-15 people</label></div>
+                    <div class="option"><input type="radio" id="q1_3d" name="q1_3" value="16-50"><label for="q1_3d">16-50 people</label></div>
+                    <div class="option"><input type="radio" id="q1_3e" name="q1_3" value="50+"><label for="q1_3e">50+ people</label></div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q1.4: Years of SAR experience
+                        <span class="info-toggle" onclick="toggleInfo('info_q1_4')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q1_4">
+                        <strong>Help:</strong> Experience level helps us understand training needs and feature complexity preferences. New teams need different support than veteran organizations.
+                    </div>
+                    <div class="option"><input type="radio" id="q1_4a" name="q1_4" value="<1"><label for="q1_4a">Less than 1 year</label></div>
+                    <div class="option"><input type="radio" id="q1_4b" name="q1_4" value="1-3"><label for="q1_4b">1-3 years</label></div>
+                    <div class="option"><input type="radio" id="q1_4c" name="q1_4" value="4-10"><label for="q1_4c">4-10 years</label></div>
+                    <div class="option"><input type="radio" id="q1_4d" name="q1_4" value="10+"><label for="q1_4d">10+ years</label></div>
+                </div>
+            </div>
+            
+            <!-- SECTION 2 -->
+            <div class="section">
+                <div class="section-title">SECTION 2: Current Pain Points</div>
+                
+                <div class="question">
+                    <div class="question-title">Q2.1: What is your biggest operational challenge right now?
+                        <span class="info-toggle" onclick="toggleInfo('info_q2_1')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q2_1">
+                        <strong>Help:</strong> Tell us what keeps you up at night. What's the #1 issue that slows down your team or puts responders at risk?
+                    </div>
+                    <div class="question-subtitle">(Rank top 3: 1=biggest, 3=third biggest)</div>
+                    <div class="option"><input type="checkbox" id="q2_1a" name="q2_1"><label for="q2_1a">Coordinating multiple teams during incident</label></div>
+                    <div class="option"><input type="checkbox" id="q2_1b" name="q2_1"><label for="q2_1b">Tracking assets and personnel in real-time</label></div>
+                    <div class="option"><input type="checkbox" id="q2_1c" name="q2_1"><label for="q2_1c">Managing overlapping search zones</label></div>
+                    <div class="option"><input type="checkbox" id="q2_1d" name="q2_1"><label for="q2_1d">Integrating data from multiple sources</label></div>
+                    <div class="option"><input type="checkbox" id="q2_1e" name="q2_1"><label for="q2_1e">Documenting findings and evidence</label></div>
+                    <div class="option"><input type="checkbox" id="q2_1f" name="q2_1"><label for="q2_1f">Communication with field teams</label></div>
+                    <div class="option"><input type="checkbox" id="q2_1g" name="q2_1"><label for="q2_1g">Resource allocation/availability tracking</label></div>
+                    <div class="option"><input type="checkbox" id="q2_1h" name="q2_1"><label for="q2_1h">Case documentation after incident</label></div>
+                    <div class="option"><input type="checkbox" id="q2_1i" name="q2_1"><label for="q2_1i">Incident debriefing and lessons learned</label></div>
+                    <div class="option"><input type="checkbox" id="q2_1j" name="q2_1"><label for="q2_1j">Cost tracking and budgeting</label></div>
+                    <div class="option"><input type="checkbox" id="q2_1k" name="q2_1"><label for="q2_1k">Other: <input type="text" class="text-input" name="q2_1_other" style="width: 250px;"></label></div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q2.2: What systems/tools do you currently use?
+                        <span class="info-toggle" onclick="toggleInfo('info_q2_2')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q2_2">
+                        <strong>Help:</strong> This shows us what your team already depends on. We want to integrate with and complement your existing tools, not replace them.
+                    </div>
+                    <div class="question-subtitle">(Check all that apply)</div>
+                    
+                    <div style="margin-bottom: 10px;"><strong>Incident Management:</strong></div>
+                    <div class="sub-options">
+                        <div class="option"><input type="checkbox" id="q2_2a" name="q2_2_incident"><label for="q2_2a">Paper logs</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2b" name="q2_2_incident"><label for="q2_2b">Email/text coordination</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2c" name="q2_2_incident"><label for="q2_2c">Google Sheets/Docs</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2d" name="q2_2_incident"><label for="q2_2d">Specialized SAR software (specify): <input type="text" class="text-input" name="q2_2_sar_software" style="width: 200px;"></label></div>
+                        <div class="option"><input type="checkbox" id="q2_2e" name="q2_2_incident"><label for="q2_2e">ICS/NIMS forms</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2f" name="q2_2_incident"><label for="q2_2f">Radio dispatch system</label></div>
+                    </div>
+                    
+                    <div style="margin-top: 10px; margin-bottom: 10px;"><strong>Data Collection:</strong></div>
+                    <div class="sub-options">
+                        <div class="option"><input type="checkbox" id="q2_2g" name="q2_2_data"><label for="q2_2g">GPS devices (handheld)</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2h" name="q2_2_data"><label for="q2_2h">Smartphone GPS</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2i" name="q2_2_data"><label for="q2_2i">Survey-grade GPS (RTK)</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2j" name="q2_2_data"><label for="q2_2j">Drone mapping</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2k" name="q2_2_data"><label for="q2_2k">Sonar systems (specify): <input type="text" class="text-input" name="q2_2_sonar" style="width: 200px;"></label></div>
+                        <div class="option"><input type="checkbox" id="q2_2l" name="q2_2_data"><label for="q2_2l">Thermal imaging</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2m" name="q2_2_data"><label for="q2_2m">Photos/video (manual)</label></div>
+                    </div>
+                    
+                    <div style="margin-top: 10px; margin-bottom: 10px;"><strong>Communication:</strong></div>
+                    <div class="sub-options">
+                        <div class="option"><input type="checkbox" id="q2_2n" name="q2_2_comm"><label for="q2_2n">Marine VHF radio</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2o" name="q2_2_comm"><label for="q2_2o">Land mobile radio (DMR/P25)</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2p" name="q2_2_comm"><label for="q2_2p">Satellite phone</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2q" name="q2_2_comm"><label for="q2_2q">Cell phone/SMS</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2r" name="q2_2_comm"><label for="q2_2r">Mesh radio (LoRa, etc)</label></div>
+                        <div class="option"><input type="checkbox" id="q2_2s" name="q2_2_comm"><label for="q2_2s">WhatsApp/Telegram</label></div>
+                    </div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q2.3: What integration would help most?
+                        <span class="info-toggle" onclick="toggleInfo('info_q2_3')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q2_3">
+                        <strong>Help:</strong> These are specific tools/data sources we can integrate. Tell us which would save your team the most time and improve decision-making.
+                    </div>
+                    <div class="question-subtitle">(Rank top 3)</div>
+                    <div class="option"><input type="checkbox" id="q2_3a" name="q2_3"><label for="q2_3a">Weather data integration</label></div>
+                    <div class="option"><input type="checkbox" id="q2_3b" name="q2_3"><label for="q2_3b">Drift/current prediction (CESAROPS)</label></div>
+                    <div class="option"><input type="checkbox" id="q2_3c" name="q2_3"><label for="q2_3c">Sonar target detection (SonarSniffer)</label></div>
+                    <div class="option"><input type="checkbox" id="q2_3d" name="q2_3"><label for="q2_3d">Real-time GPS tracking</label></div>
+                    <div class="option"><input type="checkbox" id="q2_3e" name="q2_3"><label for="q2_3e">Radio gateway (VHF/DMR)</label></div>
+                    <div class="option"><input type="checkbox" id="q2_3f" name="q2_3"><label for="q2_3f">Satellite imagery</label></div>
+                    <div class="option"><input type="checkbox" id="q2_3g" name="q2_3"><label for="q2_3g">Public/social media monitoring</label></div>
+                    <div class="option"><input type="checkbox" id="q2_3h" name="q2_3"><label for="q2_3h">Medical/health records lookup</label></div>
+                    <div class="option"><input type="checkbox" id="q2_3i" name="q2_3"><label for="q2_3i">Multi-agency dispatch</label></div>
+                    <div class="option"><input type="checkbox" id="q2_3j" name="q2_3"><label for="q2_3j">Other: <input type="text" class="text-input" name="q2_3_other" style="width: 250px;"></label></div>
+                </div>
+            </div>
+            
+            <!-- SECTION 3 -->
+            <div class="section">
+                <div class="section-title">SECTION 3: Case Management & Intake</div>
+                
+                <div class="question">
+                    <div class="question-title">Q3.1: How many incidents per year does your team handle?
+                        <span class="info-toggle" onclick="toggleInfo('info_q3_1')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q3_1">
+                        <strong>Help:</strong> Volume affects system complexity. High-volume teams need fast intake and deconfliction. Low-volume teams need thorough but simple documentation.
+                    </div>
+                    <div class="option"><input type="radio" id="q3_1a" name="q3_1" value="0-5"><label for="q3_1a">0-5</label></div>
+                    <div class="option"><input type="radio" id="q3_1b" name="q3_1" value="6-15"><label for="q3_1b">6-15</label></div>
+                    <div class="option"><input type="radio" id="q3_1c" name="q3_1" value="16-50"><label for="q3_1c">16-50</label></div>
+                    <div class="option"><input type="radio" id="q3_1d" name="q3_1" value="50+"><label for="q3_1d">50+</label></div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q3.2: What information MUST be captured immediately at intake?
+                        <span class="info-toggle" onclick="toggleInfo('info_q3_2')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q3_2">
+                        <strong>Help:</strong> In the critical first minutes, what cannot be delayed? This tells us what goes on the quick-capture form vs. detailed follow-up.
+                    </div>
+                    <div class="question-subtitle">(Rank top 5)</div>
+                    <div class="option"><input type="checkbox" id="q3_2a" name="q3_2"><label for="q3_2a">Subject details (name, age, appearance)</label></div>
+                    <div class="option"><input type="checkbox" id="q3_2b" name="q3_2"><label for="q3_2b">Last known position & time</label></div>
+                    <div class="option"><input type="checkbox" id="q3_2c" name="q3_2"><label for="q3_2c">Environmental conditions (weather, water state)</label></div>
+                    <div class="option"><input type="checkbox" id="q3_2d" name="q3_2"><label for="q3_2d">Medical conditions / medications</label></div>
+                    <div class="option"><input type="checkbox" id="q3_2e" name="q3_2"><label for="q3_2e">Equipment/survival gear with subject</label></div>
+                    <div class="option"><input type="checkbox" id="q3_2f" name="q3_2"><label for="q3_2f">Communication capability (cell, radio, etc)</label></div>
+                    <div class="option"><input type="checkbox" id="q3_2g" name="q3_2"><label for="q3_2g">Family contact information</label></div>
+                    <div class="option"><input type="checkbox" id="q3_2h" name="q3_2"><label for="q3_2h">Incident type (missing, stranded, lost hiker, etc)</label></div>
+                    <div class="option"><input type="checkbox" id="q3_2i" name="q3_2"><label for="q3_2i">Caller information</label></div>
+                    <div class="option"><input type="checkbox" id="q3_2j" name="q3_2"><label for="q3_2j">Witnesses / last seen information</label></div>
+                    <div class="option"><input type="checkbox" id="q3_2k" name="q3_2"><label for="q3_2k">Subject's travel plans / destination</label></div>
+                    <div class="option"><input type="checkbox" id="q3_2l" name="q3_2"><label for="q3_2l">Vehicle/vessel details</label></div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q3.3: What format works best for intake in field?
+                        <span class="info-toggle" onclick="toggleInfo('info_q3_3')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q3_3">
+                        <strong>Help:</strong> Field conditions vary. Are your teams in vehicles with internet? On foot in remote areas? With dispatch staff? Tell us your real-world constraints.
+                    </div>
+                    <div class="option"><input type="radio" id="q3_3a" name="q3_3" value="web"><label for="q3_3a">Web form (like provided intake.html)</label></div>
+                    <div class="option"><input type="radio" id="q3_3b" name="q3_3" value="mobile"><label for="q3_3b">Mobile app (iOS/Android)</label></div>
+                    <div class="option"><input type="radio" id="q3_3c" name="q3_3" value="sms"><label for="q3_3c">SMS/text-based</label></div>
+                    <div class="option"><input type="radio" id="q3_3d" name="q3_3" value="voice"><label for="q3_3d">Radio/voice via dispatcher</label></div>
+                    <div class="option"><input type="radio" id="q3_3e" name="q3_3" value="paper"><label for="q3_3e">Paper form then digital entry</label></div>
+                    <div class="option"><input type="radio" id="q3_3f" name="q3_3" value="combo"><label for="q3_3f">Combination of above</label></div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q3.4: After case closure, what reports do you need?
+                        <span class="info-toggle" onclick="toggleInfo('info_q3_4')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q3_4">
+                        <strong>Help:</strong> Post-operation reporting is critical for training, billing, and improvement. Which reports would save your team the most time?
+                    </div>
+                    <div class="option"><input type="checkbox" id="q3_4a" name="q3_4"><label for="q3_4a">Timeline of all events</label></div>
+                    <div class="option"><input type="checkbox" id="q3_4b" name="q3_4"><label for="q3_4b">Resource utilization (hours, costs)</label></div>
+                    <div class="option"><input type="checkbox" id="q3_4c" name="q3_4"><label for="q3_4c">Search area coverage map</label></div>
+                    <div class="option"><input type="checkbox" id="q3_4d" name="q3_4"><label for="q3_4d">All findings/evidence summary</label></div>
+                    <div class="option"><input type="checkbox" id="q3_4e" name="q3_4"><label for="q3_4e">Photos/video from searches</label></div>
+                    <div class="option"><input type="checkbox" id="q3_4f" name="q3_4"><label for="q3_4f">Lessons learned document</label></div>
+                    <div class="option"><input type="checkbox" id="q3_4g" name="q3_4"><label for="q3_4g">Gaps analysis (what worked, what didn't)</label></div>
+                    <div class="option"><input type="checkbox" id="q3_4h" name="q3_4"><label for="q3_4h">Cost breakdown by discipline/asset</label></div>
+                    <div class="option"><input type="checkbox" id="q3_4i" name="q3_4"><label for="q3_4i">Personnel fatigue tracking</label></div>
+                    <div class="option"><input type="checkbox" id="q3_4j" name="q3_4"><label for="q3_4j">Post-incident analysis (accuracy of predictions)</label></div>
+                </div>
+            </div>
+            
+            <!-- Additional sections continue... (abbreviated for brevity) -->
+            
+            <!-- SECTION 12 (Contact) -->
+            <div class="section">
+                <div class="section-title">SECTION 12: Contact & Next Steps</div>
+                
+                <div class="question">
+                    <div class="question-title">Q12.1: Can we contact you for follow-up questions?
+                        <span class="info-toggle" onclick="toggleInfo('info_q12_1')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q12_1">
+                        <strong>Help:</strong> Your feedback is valuable. We may need to clarify responses or ask about specific use cases. This helps us build the right system.
+                    </div>
+                    <div class="option"><input type="radio" id="q12_1a" name="q12_1" value="yes"><label for="q12_1a">Yes</label></div>
+                    <div class="option"><input type="radio" id="q12_1b" name="q12_1" value="no"><label for="q12_1b">No</label></div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q12.2: Contact information (if yes)</div>
+                    <div class="option">
+                        <label>Name:</label>
+                        <input type="text" name="contact_name" class="text-input">
+                    </div>
+                    <div class="option">
+                        <label>Organization:</label>
+                        <input type="text" name="contact_org" class="text-input">
+                    </div>
+                    <div class="option">
+                        <label>Role/Title:</label>
+                        <input type="text" name="contact_role" class="text-input">
+                    </div>
+                    <div class="option">
+                        <label>Email:</label>
+                        <input type="email" name="contact_email" class="text-input">
+                    </div>
+                    <div class="option">
+                        <label>Phone:</label>
+                        <input type="tel" name="contact_phone" class="text-input">
+                    </div>
+                    <div class="option">
+                        <label>Best way to reach you:</label>
+                        <div>
+                            <input type="checkbox" id="best_email" name="best_contact" value="email"><label for="best_email" style="display:inline;">Email</label>
+                            <input type="checkbox" id="best_phone" name="best_contact" value="phone"><label for="best_phone" style="display:inline;">Phone</label>
+                            <input type="checkbox" id="best_text" name="best_contact" value="text"><label for="best_text" style="display:inline;">Text</label>
+                            <input type="checkbox" id="best_radio" name="best_contact" value="radio"><label for="best_radio" style="display:inline;">Radio</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q12.3: Would you be willing to participate in:
+                        <span class="info-toggle" onclick="toggleInfo('info_q12_3')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q12_3">
+                        <strong>Help:</strong> Select the ways you'd be willing to help shape the platform. Even small contributions (surveys, feedback calls) move us forward. No commitment is necessary.
+                    </div>
+                    <div class="option"><input type="checkbox" id="part_a" name="participate"><label for="part_a">Beta testing specific features</label></div>
+                    <div class="option"><input type="checkbox" id="part_b" name="participate"><label for="part_b">Design feedback sessions (1-2 hours monthly)</label></div>
+                    <div class="option"><input type="checkbox" id="part_c" name="participate"><label for="part_c">Platform working group (monthly calls)</label></div>
+                    <div class="option"><input type="checkbox" id="part_d" name="participate"><label for="part_d">On-site training/implementation</label></div>
+                    <div class="option"><input type="checkbox" id="part_e" name="participate"><label for="part_e">Case study/testimonial</label></div>
+                    <div class="option"><input type="checkbox" id="part_f" name="participate"><label for="part_f">None, survey response only</label></div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q12.4: When would pilot testing timeline work for your team?
+                        <span class="info-toggle" onclick="toggleInfo('info_q12_4')">ℹ️ More Info</span>
+                    </div>
+                    <div class="question-info" id="info_q12_4">
+                        <strong>Help:</strong> Early pilots help us identify issues and refine based on real-world use. When could your team dedicate time to test?
+                    </div>
+                    <div class="option"><input type="radio" id="timeline_a" name="timeline" value="jan"><label for="timeline_a">January 2026</label></div>
+                    <div class="option"><input type="radio" id="timeline_b" name="timeline" value="feb"><label for="timeline_b">February 2026</label></div>
+                    <div class="option"><input type="radio" id="timeline_c" name="timeline" value="mar"><label for="timeline_c">March 2026</label></div>
+                    <div class="option"><input type="radio" id="timeline_d" name="timeline" value="apr"><label for="timeline_d">April 2026+</label></div>
+                    <div class="option"><input type="radio" id="timeline_e" name="timeline" value="unsure"><label for="timeline_e">Unsure</label></div>
+                </div>
+                
+                <div class="question">
+                    <div class="question-title">Q12.5: Additional Comments or Other Feedback</div>
+                    <p style="font-size: 13px; color: #666; margin: 10px 0;">Use this space to add any other information, suggestions, or feedback not covered in the questions above:</p>
+                    <textarea name="additional_comments" id="additional_comments" style="width: 100%; height: 150px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-family: Arial, sans-serif; font-size: 13px; resize: vertical;"></textarea>
+                </div>
+            </div>
+            
+            <!-- Footer -->
+            <div class="footer">
+                <div class="footer-highlight">
+                    <strong>📝 Submission Instructions</strong><br>
+                    Please return this survey by <strong>December 31, 2025 (Midnight)</strong><br><br>
+                    <strong>Three ways to submit:</strong><br>
+                    ✓ <strong>Submit Button:</strong> Click "Submit Response" below to send directly to the SAR Platform database<br>
+                    🖨️ <strong>Print & Email:</strong> Click "Print / Save as PDF", then email to <strong>festeraeb@yahoo.com</strong><br>
+                    📧 <strong>Email Directly:</strong> Send completed form to <strong>festeraeb@yahoo.com</strong> with subject "SAR Platform Survey Response"
+                </div>
+                <p><strong>Questions about the survey?</strong> Contact festeraeb@yahoo.com</p>
+                <p style="margin-top: 15px; font-size: 14px; font-weight: bold;">Thank You!</p>
+                <p>Your feedback directly shapes platform development. Whether you're a small volunteer team or a major SAR organization, your operational insights are invaluable.</p>
+                <p><strong>Together, we're building tools that save lives.</strong></p>
+                <p style="margin-top: 20px; font-size: 11px;">Survey Version: 1.0 | Created: November 26, 2025</p>
+            </div>
+            
+            <!-- Button Group -->
+            <div class="button-group">
+                <button type="button" class="btn-print" onclick="window.print()">🖨️ Print / Save as PDF</button>
+                <button type="reset" class="btn-reset">↻ Clear All</button>
+                <button type="submit" class="btn-submit">✓ Submit Response</button>
+            </div>
+        </div>
+    </form>
+    
+    <script>
+        // Toggle info sections
+        function toggleInfo(infoId) {
+            const infoBox = document.getElementById(infoId);
+            infoBox.classList.toggle('show');
+        }
+        
+        // Form submission handler - POST directly to SAR Platform API
+        document.getElementById('surveyForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const data = {};
+            
+            // Convert form data to object, handling multiple values
+            for (let [key, value] of formData.entries()) {
+                if (data[key]) {
+                    if (Array.isArray(data[key])) {
+                        data[key].push(value);
+                    } else {
+                        data[key] = [data[key], value];
+                    }
+                } else {
+                    data[key] = value;
+                }
+            }
+            
+            // Try port 8000 first (standard API port), fall back to port 80
+            const submitToAPI = (port) => {
+                const apiUrl = `http://localhost:${port}/api/survey/submit`;
+                
+                fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(response => response.json())
+                .then(result => {
+                    if (result.status === 'success') {
+                        alert('✓ Thank you for your feedback!\n\nYour response has been recorded.\nResponse ID: ' + result.response_id);
+                    } else {
+                        alert('Error: ' + (result.detail || 'Failed to submit response'));
+                    }
+                })
+                .catch(error => {
+                    console.error(`Error on port ${port}:`, error);
+                    // If port 8000 fails, try port 80
+                    if (port === 8000) {
+                        console.log('Port 8000 unavailable, trying port 80...');
+                        submitToAPI(80);
+                    } else {
+                        alert('Error submitting response:\n' + error.message + '\n\nMake sure the SAR Platform API server is running on localhost:8000 or localhost:80');
+                    }
+                });
+            };
+            
+            // Start with port 8000
+            submitToAPI(8000);
+        });
+        
+        // Print-friendly page setup
+        window.addEventListener('beforeprint', function() {
+            console.log('Preparing for print...');
+        });
+    </script>
+</body>
+</html>
