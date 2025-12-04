@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAR Intake Form</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        
+        .form-container {
+            padding: 30px;
+        }
+        
+        .form-section {
+            margin-bottom: 30px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 20px;
+        }
+        
+        .form-section:last-child {
+            border-bottom: none;
+        }
+        
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 15px;
+        }
+        
+        .form-row.full {
+            grid-template-columns: 1fr;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        
+        label .required {
+            color: #e74c3c;
+        }
+        
+        input[type="text"],
+        input[type="email"],
+        input[type="tel"],
+        input[type="date"],
+        input[type="time"],
+        input[type="number"],
+        textarea,
+        select {
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.3s ease;
+        }
+        
+        input[type="text"]:focus,
+        input[type="email"]:focus,
+        input[type="tel"]:focus,
+        input[type="date"]:focus,
+        input[type="time"]:focus,
+        input[type="number"]:focus,
+        textarea:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .checkbox-group,
+        .radio-group {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        
+        input[type="checkbox"],
+        input[type="radio"] {
+            margin-right: 5px;
+            cursor: pointer;
+        }
+        
+        .checkbox-label,
+        .radio-label {
+            display: flex;
+            align-items: center;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        
+        .priority-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        
+        .priority-critical {
+            background: #ffebee;
+            color: #c62828;
+        }
+        
+        .priority-high {
+            background: #fff3e0;
+            color: #e65100;
+        }
+        
+        .priority-normal {
+            background: #e3f2fd;
+            color: #0d47a1;
+        }
+        
+        .location-map {
+            width: 100%;
+            height: 300px;
+            border: 2px dashed #ddd;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #999;
+            font-size: 14px;
+            background: #fafafa;
+            margin-top: 10px;
+        }
+        
+        .form-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #eee;
+        }
+        
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-submit {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            grid-column: 1 / -1;
+        }
+        
+        .btn-submit:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .btn-reset {
+            background: #ecf0f1;
+            color: #333;
+        }
+        
+        .btn-reset:hover {
+            background: #d5dbdb;
+        }
+        
+        .required-note {
+            font-size: 12px;
+            color: #999;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .alert.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            display: block;
+        }
+        
+        .alert.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            display: block;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        @media (max-width: 600px) {
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+            
+            .form-actions {
+                grid-template-columns: 1fr;
+            }
+            
+            .form-container {
+                padding: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>SAR Intake Form</h1>
+            <p>Search & Rescue Case Management System</p>
+        </div>
+        
+        <div class="form-container">
+            <div id="successAlert" class="alert success"></div>
+            <div id="errorAlert" class="alert error"></div>
+            <div id="loadingIndicator" class="loading">
+                <div class="spinner"></div>
+                <p>Processing intake...</p>
+            </div>
+            
+            <form id="intakeForm">
+                <!-- CALLER INFORMATION -->
+                <div class="form-section">
+                    <h2 class="section-title">Caller Information</h2>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Caller Name <span class="required">*</span></label>
+                            <input type="text" name="caller_name" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Caller Phone <span class="required">*</span></label>
+                            <input type="tel" name="caller_phone" required>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Relationship to Subject</label>
+                            <select name="caller_relationship">
+                                <option value="">-- Select --</option>
+                                <option value="family">Family</option>
+                                <option value="friend">Friend</option>
+                                <option value="witness">Witness</option>
+                                <option value="leo">Law Enforcement</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- INCIDENT INFORMATION -->
+                <div class="form-section">
+                    <h2 class="section-title">Incident Information</h2>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Incident Type <span class="required">*</span></label>
+                            <select name="incident_type" id="incidentType" required onchange="updateIncidentType()">
+                                <option value="">-- Select --</option>
+                                <option value="person_missing">Missing Person</option>
+                                <option value="vessel_missing">Missing Vessel</option>
+                                <option value="water_rescue">Water Rescue</option>
+                                <option value="aircraft_missing">Missing Aircraft</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Incident Date <span class="required">*</span></label>
+                            <input type="date" name="incident_date" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Incident Time <span class="required">*</span></label>
+                            <input type="time" name="incident_time" required>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row full">
+                        <div class="form-group">
+                            <label>Incident Description <span class="required">*</span></label>
+                            <textarea name="incident_description" placeholder="What happened? (be specific)" required></textarea>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- SUBJECT INFORMATION -->
+                <div class="form-section">
+                    <h2 class="section-title">Missing Subject</h2>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Subject Name <span class="required">*</span></label>
+                            <input type="text" name="subject_name" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Age</label>
+                            <input type="number" name="subject_age" min="0" max="120">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Gender</label>
+                            <select name="subject_gender">
+                                <option value="">-- Select --</option>
+                                <option value="male">Male</option>
+                                <option value="female">Female</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row full">
+                        <div class="form-group">
+                            <label>Physical Description <span class="required">*</span></label>
+                            <textarea name="subject_description" placeholder="Height, weight, hair color, eye color, clothing, marks, etc." required></textarea>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row full">
+                        <div class="form-group">
+                            <label>Medical Conditions</label>
+                            <div class="checkbox-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="medical_condition_diabetes">
+                                    Diabetes
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="medical_condition_heart">
+                                    Heart Condition
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="medical_condition_dementia">
+                                    Dementia/Alzheimer's
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" name="medical_condition_mobility">
+                                    Mobility Issues
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Current Medications</label>
+                            <input type="text" name="medications" placeholder="List any medications they take">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- VESSEL INFORMATION (conditional) -->
+                <div class="form-section" id="vesselSection" style="display: none;">
+                    <h2 class="section-title">Vessel Information</h2>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Vessel Name</label>
+                            <input type="text" name="vessel_name">
+                        </div>
+                        <div class="form-group">
+                            <label>Vessel Type</label>
+                            <select name="vessel_type">
+                                <option value="">-- Select --</option>
+                                <option value="sailboat">Sailboat</option>
+                                <option value="motorboat">Motor Boat</option>
+                                <option value="speedboat">Speed Boat</option>
+                                <option value="fishing_vessel">Fishing Vessel</option>
+                                <option value="cargo_ship">Cargo Ship</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Length (meters)</label>
+                            <input type="number" name="vessel_length_m" step="0.1">
+                        </div>
+                        <div class="form-group">
+                            <label>Color</label>
+                            <input type="text" name="vessel_color">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Registration/Hull Number</label>
+                            <input type="text" name="vessel_registration">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- LAST KNOWN INFORMATION -->
+                <div class="form-section">
+                    <h2 class="section-title">Last Known Position</h2>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Latitude</label>
+                            <input type="number" name="last_known_lat" step="0.0001" placeholder="e.g., 42.3601">
+                        </div>
+                        <div class="form-group">
+                            <label>Longitude</label>
+                            <input type="number" name="last_known_lon" step="0.0001" placeholder="e.g., -87.1245">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row full">
+                        <div class="form-group">
+                            <label>Location Description <span class="required">*</span></label>
+                            <input type="text" name="last_known_location_description" placeholder="e.g., State Park Marina, Pier 3" required>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Last Seen Time <span class="required">*</span></label>
+                            <input type="time" name="last_known_time" required>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ENVIRONMENTAL CONDITIONS -->
+                <div class="form-section">
+                    <h2 class="section-title">Environmental Conditions</h2>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Weather Description</label>
+                            <select name="weather_description">
+                                <option value="">-- Select --</option>
+                                <option value="clear">Clear Skies</option>
+                                <option value="cloudy">Cloudy</option>
+                                <option value="rainy">Rainy</option>
+                                <option value="stormy">Stormy</option>
+                                <option value="foggy">Foggy</option>
+                                <option value="snowy">Snowy</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Wind Speed (km/h)</label>
+                            <input type="number" name="wind_speed_kmh" step="0.1">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Water Temperature (°C)</label>
+                            <input type="number" name="water_temp_c" step="0.1">
+                        </div>
+                        <div class="form-group">
+                            <label>Water Conditions</label>
+                            <select name="water_conditions">
+                                <option value="">-- Select --</option>
+                                <option value="calm">Calm</option>
+                                <option value="moderate">Moderate Waves</option>
+                                <option value="rough">Rough</option>
+                                <option value="severe">Severe</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- RISK FACTORS -->
+                <div class="form-section">
+                    <h2 class="section-title">Risk Factors</h2>
+                    
+                    <div class="form-row full">
+                        <div class="form-group">
+                            <label>Is subject a child?</label>
+                            <div class="radio-group">
+                                <label class="radio-label">
+                                    <input type="radio" name="subject_is_child" value="true"> Yes
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="subject_is_child" value="false" checked> No
+                                </label>
+                            </div>
+                            <span class="priority-badge priority-critical" style="display:none;" id="childWarning">
+                                ⚠️ CRITICAL PRIORITY
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row full">
+                        <div class="form-group">
+                            <label>Subject has medical condition requiring medication?</label>
+                            <div class="radio-group">
+                                <label class="radio-label">
+                                    <input type="radio" name="subject_has_medical_condition" value="true"> Yes
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="subject_has_medical_condition" value="false" checked> No
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row full">
+                        <div class="form-group">
+                            <label>Survival Skills / Equipment</label>
+                            <textarea name="survival_skills" placeholder="Swimming ability, life jacket, GPS device, etc."></textarea>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- FAMILY CONTACT -->
+                <div class="form-section">
+                    <h2 class="section-title">Family/Next of Kin Contact</h2>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Family Contact Name</label>
+                            <input type="text" name="family_contact_name">
+                        </div>
+                        <div class="form-group">
+                            <label>Family Contact Phone</label>
+                            <input type="tel" name="family_contact_phone">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- FORM ACTIONS -->
+                <div class="form-actions">
+                    <button type="submit" class="btn-submit">Submit Intake</button>
+                    <button type="reset" class="btn-reset">Clear Form</button>
+                </div>
+                
+                <p class="required-note">
+                    <span class="required">*</span> = Required fields
+                </p>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        // Toggle vessel section based on incident type
+        function updateIncidentType() {
+            const incidentType = document.getElementById('incidentType').value;
+            const vesselSection = document.getElementById('vesselSection');
+            if (incidentType === 'vessel_missing') {
+                vesselSection.style.display = 'block';
+            } else {
+                vesselSection.style.display = 'none';
+            }
+        }
+        
+        // Show child warning
+        document.querySelectorAll('input[name="subject_is_child"]').forEach(el => {
+            el.addEventListener('change', function() {
+                const warning = document.getElementById('childWarning');
+                if (this.value === 'true') {
+                    warning.style.display = 'inline-block';
+                } else {
+                    warning.style.display = 'none';
+                }
+            });
+        });
+        
+        // Form submission
+        document.getElementById('intakeForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const loading = document.getElementById('loadingIndicator');
+            const successAlert = document.getElementById('successAlert');
+            const errorAlert = document.getElementById('errorAlert');
+            
+            // Collect medical conditions
+            const medicalConditions = [];
+            if (formData.get('medical_condition_diabetes') === 'on') medicalConditions.push('diabetes');
+            if (formData.get('medical_condition_heart') === 'on') medicalConditions.push('heart_condition');
+            if (formData.get('medical_condition_dementia') === 'on') medicalConditions.push('dementia');
+            if (formData.get('medical_condition_mobility') === 'on') medicalConditions.push('mobility_issues');
+            
+            const payload = {
+                caller_name: formData.get('caller_name'),
+                caller_phone: formData.get('caller_phone'),
+                caller_relationship: formData.get('caller_relationship') || null,
+                incident_type: formData.get('incident_type'),
+                incident_description: formData.get('incident_description'),
+                incident_date: formData.get('incident_date'),
+                incident_time: formData.get('incident_time'),
+                subject_name: formData.get('subject_name'),
+                subject_age: formData.get('subject_age') ? parseInt(formData.get('subject_age')) : null,
+                subject_gender: formData.get('subject_gender') || null,
+                subject_description: formData.get('subject_description'),
+                vessel_name: formData.get('vessel_name') || null,
+                vessel_type: formData.get('vessel_type') || null,
+                vessel_length_m: formData.get('vessel_length_m') ? parseFloat(formData.get('vessel_length_m')) : null,
+                vessel_color: formData.get('vessel_color') || null,
+                vessel_registration: formData.get('vessel_registration') || null,
+                last_known_lat: formData.get('last_known_lat') ? parseFloat(formData.get('last_known_lat')) : null,
+                last_known_lon: formData.get('last_known_lon') ? parseFloat(formData.get('last_known_lon')) : null,
+                last_known_location_description: formData.get('last_known_location_description'),
+                last_known_time: formData.get('incident_date') + ' ' + formData.get('last_known_time'),
+                weather_description: formData.get('weather_description') || null,
+                water_temp_c: formData.get('water_temp_c') ? parseFloat(formData.get('water_temp_c')) : null,
+                water_conditions: formData.get('water_conditions') || null,
+                wind_speed_kmh: formData.get('wind_speed_kmh') ? parseFloat(formData.get('wind_speed_kmh')) : null,
+                medical_conditions: medicalConditions.length > 0 ? medicalConditions : null,
+                medications: formData.get('medications') || null,
+                survival_skills: formData.get('survival_skills') || null,
+                subject_is_child: formData.get('subject_is_child') === 'true',
+                subject_has_medical_condition: formData.get('subject_has_medical_condition') === 'true',
+                family_contact_name: formData.get('family_contact_name') || null,
+                family_contact_phone: formData.get('family_contact_phone') || null,
+                government_liaison_needed: formData.get('incident_type') === 'vessel_missing'
+            };
+            
+            loading.style.display = 'block';
+            errorAlert.style.display = 'none';
+            successAlert.style.display = 'none';
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/intake/new_case', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    loading.style.display = 'none';
+                    successAlert.textContent = `Case created successfully! Case #: ${result.case_number}. Subject: ${result.subject_name}. Priority: ${['CRITICAL', 'HIGH', 'NORMAL', 'LOW'][result.priority_level - 1]}`;
+                    successAlert.style.display = 'block';
+                    
+                    // Clear form
+                    document.getElementById('intakeForm').reset();
+                    updateIncidentType();
+                    
+                    // Show case details after 3 seconds
+                    setTimeout(() => {
+                        alert(`Case ID: ${result.case_id}\n\nNext Steps:\n- Assign incident coordinator\n- Define search zones\n- Deploy resources`);
+                    }, 2000);
+                } else {
+                    throw new Error(result.detail || 'Failed to create case');
+                }
+            } catch (error) {
+                loading.style.display = 'none';
+                errorAlert.textContent = `Error: ${error.message}`;
+                errorAlert.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>
