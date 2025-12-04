@@ -1,5 +1,5 @@
-# License key generator (excluded from beta release)
-license_key_generator.py
+# License key generator - IMPORTANT: Include in master branch for SonarSniffer
+# license_key_generator.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
