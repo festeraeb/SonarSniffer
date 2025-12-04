@@ -153,12 +153,12 @@ The more voices we hear, the better platform we'll build.
 If your team or organization wants to support CesarOps development:
 
 **Donation Options:**
-- 🎁 **Patreon**: https://patreon.com/cesarops (monthly recurring)
-- ☕ **Ko-fi**: https://ko-fi.com/cesarops (one-time or monthly)
-- 💚 **Liberapay**: https://liberapay.com/cesarops (international)
+- ☕ **Ko-fi**: https://ko-fi.com/cesarops (easiest - one-time or monthly, ZERO FEES)
+- 💳 **PayPal**: Email cesarops-paypal@gmail.com (familiar method, recurring available)
+- 💚 **Liberapay**: https://liberapay.com/cesarops (international options)
 - 🐙 **GitHub**: https://github.com/sponsors/festeraeb (developers)
 
-See attached: **CESAROPS_DONATION_INFO.md** for full sponsorship details
+See attached: **CESAROPS_DONATION_INFO.md** for full sponsorship details and impact levels
 
 ---
 

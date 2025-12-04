@@ -20,32 +20,42 @@ CesarOps is building technology that saves lives in Search & Rescue operations. 
 
 ## Donation Platforms
 
-### 🎁 Patreon (Monthly Recurring Donations)
-**https://patreon.com/cesarops**
-
-Best for: Sustained monthly support, recurring donations  
-Benefits:
-- Monthly impact updates
-- Early access to new features
-- Direct communication with development team
-- Recognition as CesarOps supporter
-
-Tiers:
-- **$5/month** - SAR Supporter
-- **$25/month** - SAR Advocate  
-- **$100/month** - SAR Champion
-- **$500/month** - Platinum Partner (custom benefits)
+**Quick Links:**
+- ☕ **Ko-fi** (easiest, no fees): https://ko-fi.com/cesarops
+- 💳 **PayPal** (familiar): cesarops-paypal@gmail.com
+- 💚 **Liberapay** (international): https://liberapay.com/cesarops
+- 🐙 **GitHub Sponsors** (developers): https://github.com/sponsors/festeraeb
 
 ---
 
 ### ☕ Ko-fi (One-Time or Monthly)
 **https://ko-fi.com/cesarops**
 
-Best for: Quick, easy one-time donations  
+**RECOMMENDED** - Easiest option, zero platform fees
+
+Best for: Quick, easy donations (one-time or recurring)  
 Donation Options:
 - One-time donations ($5, $10, $25, $50, custom)
 - Monthly recurring support
 - No platform fees (100% goes to CesarOps)
+
+---
+
+### 💳 PayPal (One-Time or Recurring)
+**Email: cesarops-paypal@gmail.com**
+
+Best for: Donors familiar with PayPal or requiring recurring setup  
+Setup:
+- Email donation requests to cesarops-paypal@gmail.com
+- One-time donations: Any amount
+- Recurring donations: Monthly or annual setup available
+- Invoice provided upon request
+
+Donation Levels:
+- **$5** - SAR Supporter
+- **$25** - SAR Advocate  
+- **$100** - SAR Champion
+- **$500+** - Platinum Partner (direct communication)
 
 ---
 
