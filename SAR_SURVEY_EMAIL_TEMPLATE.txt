@@ -50,7 +50,6 @@ A brief, 10-15 minute survey covering:
 
 The **CesarOps platform** is being funded by:
 - 100% of SonarSniffer sonar analysis tool license sales
-- Community donations and sponsorships
 - Volunteer contributions from the SAR community
 
 **100% of proceeds fund Search & Rescue operations.**
@@ -145,20 +144,6 @@ Free onboarding and training when platform launches
 If you know other SAR teams, volunteer organizations, or emergency management agencies that should have input on this platform, **please forward this email to them.**
 
 The more voices we hear, the better platform we'll build.
-
----
-
-## Supporting CesarOps
-
-If your team or organization wants to support CesarOps development:
-
-**Donation Options:**
-- ☕ **Ko-fi**: https://ko-fi.com/cesarops (easiest - one-time or monthly, ZERO FEES)
-- 💳 **PayPal**: Email cesarops-paypal@gmail.com (familiar method, recurring available)
-- 💚 **Liberapay**: https://liberapay.com/cesarops (international options)
-- 🐙 **GitHub**: https://github.com/sponsors/festeraeb (developers)
-
-See attached: **CESAROPS_DONATION_INFO.md** for full sponsorship details and impact levels
 
 ---
 
