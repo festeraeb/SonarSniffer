@@ -1,0 +1,121 @@
+# SonarSniffer Windows - Quick Reference Card
+
+## Installation Checklist
+
+```
+☐ Step 1: Run test_windows_setup.bat
+   └─ All checks pass? Continue to Step 2
+   └─ Checks fail? Fix issues and try again
+
+☐ Step 2: Run install_windows.bat
+   └─ See "Installation Complete!"? Continue to Step 3
+   └─ See errors? Check troubleshooting section
+
+☐ Step 3: Run verify_installation.bat
+   └─ See "Verification Complete - Success!"? You're done!
+   └─ See errors? Run install_windows.bat again
+```
+
+## Using SonarSniffer
+
+### Every Time You Start
+```batch
+cd C:\path\to\SonarSniffer
+sonarsniffer_env\Scripts\activate.bat
+```
+
+You should see: `(sonarsniffer_env) C:\path\to\SonarSniffer>`
+
+### Common Commands
+
+```batch
+# Show help
+sonarsniffer --help
+
+# Analyze a sonar file (generates report)
+sonarsniffer analyze C:\path\to\file.RSD --output C:\output\folder
+
+# Start web interface (open browser to http://localhost:8080)
+sonarsniffer web C:\path\to\file.RSD
+
+# Check your license
+sonarsniffer license --validate YOUR_LICENSE_KEY
+
+# Get version
+sonarsniffer --version
+```
+
+## Quick Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| "Python not found" | Install Python from python.org, check "Add Python to PATH" |
+| "Permission denied" | Run Command Prompt as Administrator |
+| "sonarsniffer: command not found" | Activate environment: `sonarsniffer_env\Scripts\activate.bat` |
+| "ModuleNotFoundError: docopt" | Re-run: `install_windows.bat` |
+| Installation hangs | Press Ctrl+C, run as Administrator, try again |
+
+## File Structure
+
+```
+C:\path\to\SonarSniffer\
+├── install_windows.bat          (← Run this first)
+├── test_windows_setup.bat       (← Run to test system)
+├── verify_installation.bat      (← Run to verify)
+├── sonarsniffer_env\            (← Created by installer)
+│   ├── Scripts\
+│   ├── Lib\
+│   └── Include\
+├── src\
+│   └── sonarsniffer\            (← Main code)
+├── pyproject.toml               (← Package config)
+└── README.md
+```
+
+## Contact
+
+**Support**: festeraeb@yahoo.com
+
+**Include when requesting help**:
+- Windows version (10 or 11?)
+- Python version (run: `python --version`)
+- Full error message (copy-paste)
+- Which script failed (install_windows.bat, verify_installation.bat, etc.)
+
+## What Version Are You Running?
+
+```batch
+sonarsniffer --version
+```
+
+**Current**: 1.0.0-beta with docopt fix
+
+## Key Files This Installation Installs
+
+| Package | What It Does |
+|---------|------------|
+| numpy | Scientific computing / matrix operations |
+| matplotlib | Visualization / plotting sonar data |
+| pillow | Image processing |
+| requests | Download/upload data |
+| docopt | Command-line argument parsing |
+| sonarsniffer | Main application |
+
+All installed in isolated `sonarsniffer_env/` - won't affect other Python apps.
+
+## Uninstall
+
+```batch
+# Just delete the folder (that's it!)
+rmdir /s /q sonarsniffer_env
+
+# Or from Windows File Explorer:
+# Right-click sonarsniffer_env → Delete
+```
+
+The `sonarsniffer_env/` folder contains everything. Deleting it removes SonarSniffer completely.
+
+---
+
+**First time?** Start here: `test_windows_setup.bat`  
+**Already installed?** Use: `sonarsniffer_env\Scripts\activate.bat`
