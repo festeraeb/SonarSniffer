@@ -30,7 +30,6 @@ from docopt import docopt
 sys.path.insert(0, os.path.dirname(__file__))
 
 from sonarsniffer import LicenseManager, SonarParser, WebDashboardGenerator
-from sonarsniffer.license_key_generator import LicenseKeyGenerator
 
 def main():
     """Main CLI entry point"""
@@ -272,21 +271,20 @@ def generate_geojson_output(data: Dict, output_dir: str) -> str:
         json.dump(geojson, f, indent=2)
 
     return output_file
-    """Handle license command"""
-    if args['--generate']:
-        generator = LicenseKeyGenerator()
-        key = generator.generate_key()
-        print(f"Generated license key: {key}")
-        return 0
 
 def license_command(args):
     """Handle license command"""
     if args['--generate']:
-        from .license_key_generator import LicenseKeyGenerator
-        generator = LicenseKeyGenerator()
-        key = generator.generate_key()
-        print(f"Generated license key: {key}")
-        return 0
+        try:
+            from sonarsniffer.license_key_generator import LicenseKeyGenerator
+            generator = LicenseKeyGenerator()
+            key = generator.generate_key()
+            print(f"Generated license key: {key}")
+            return 0
+        except ImportError:
+            print("ERROR: License key generator module not found")
+            print("This feature requires the optional license_key_generator module")
+            return 1
 
     elif args['--validate']:
         key = args['--validate']
