@@ -17,14 +17,6 @@ import math
 import base64
 from datetime import datetime
 
-# Import license manager
-try:
-    from .license_manager import require_license
-    require_license()  # Check license on import
-except ImportError:
-    print("⚠️  License manager not found. Running in unlicensed mode.")
-    print("📧 Contact festeraeb@yahoo.com for proper licensing.")
-
 class WebDashboardGenerator:
     """
     Generate interactive web dashboards for marine survey data
