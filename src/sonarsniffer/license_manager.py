@@ -35,8 +35,10 @@ class LicenseManager:
             except (json.JSONDecodeError, IOError):
                 pass
 
-        # Return default trial license
-        return self._create_trial_license()
+        # Create and save default trial license
+        license_data = self._create_trial_license()
+        self._save_license(license_data)
+        return license_data
 
     def _create_trial_license(self) -> Dict:
         """Create a new trial license"""
@@ -71,11 +73,16 @@ class LicenseManager:
         Check if the current license is valid
         Returns: (is_valid, message)
         """
-        now = datetime.now()
+        now = datetime.now(datetime.now().astimezone().tzinfo) if datetime.now().astimezone().tzinfo else datetime.now()
 
         # Check expiry date
         if "expiry_date" in self.license_data:
             expiry = datetime.fromisoformat(self.license_data["expiry_date"])
+            # Normalize both to naive datetimes for comparison
+            if expiry.tzinfo is not None:
+                expiry = expiry.replace(tzinfo=None)
+            if now.tzinfo is not None:
+                now = now.replace(tzinfo=None)
             if now > expiry:
                 return False, "Trial license expired. Contact festeraeb@yahoo.com for a commercial license."
 

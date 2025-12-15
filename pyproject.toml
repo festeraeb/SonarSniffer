@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel", "setuptools_rust>=1.1", "pyo3>=0.21"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -85,3 +85,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 sonarsniffer = ["*.txt", "*.md", "*.html", "*.css", "*.js", "*.svg", "*.png"]
+
+[tool.setuptools-rust]
+target-dir = "target"
