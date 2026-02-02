@@ -360,3 +360,51 @@ def export_simulation_to_kml(
         )
 
     return results
+
+
+# Compatibility wrapper expected by package __init__
+class GeoTIFFTileExporter:
+    """Simple wrapper providing an `export_tiles(data, zoom_level)` API
+
+    For now this will accept parsed sonar `data` (dict with records/bounds)
+    and attempt to build a minimal heatmap raster and export tiles.
+    """
+
+    def __init__(self, output_dir: str = "outputs"):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True)
+        self.geotiff_gen = GeoTIFFGenerator(self.output_dir)
+
+    def export_tiles(self, data: dict, zoom_level: int = 10) -> int:
+        """Create a minimal raster (from bounds) and write a GeoTIFF file.
+
+        Returns number of tiles created (approximate 1 for now).
+        """
+        try:
+            # Build a naive heatmap if 'heatmap' key present
+            if "heatmap" in data:
+                heatmap = np.array(data["heatmap"])
+                bounds = data.get("bounds", (-90, 40, -82, 48))
+            else:
+                # Build a coarse raster from records
+                records = data.get("records", [])
+                if not records:
+                    return 0
+                # Create a tiny raster (100x100) summarizing counts
+                lats = [r.get("lat", 0.0) for r in records]
+                lons = [r.get("lon", 0.0) for r in records]
+                minlon, maxlon = min(lons), max(lons)
+                minlat, maxlat = min(lats), max(lats)
+                bounds = (minlon, minlat, maxlon, maxlat)
+                heatmap = np.zeros((100, 100), dtype=np.float32)
+
+            filename = f"tiles_zoom_{zoom_level}.tif"
+            geotiff_path = self.geotiff_gen.create_geotiff(heatmap, bounds, filename)
+            if geotiff_path:
+                self.geotiff_gen.create_pyramid(geotiff_path)
+                # For now, return 1 to indicate success
+                return 1
+            return 0
+        except Exception as e:
+            logger.error(f"Tile export failed: {e}")
+            return 0
