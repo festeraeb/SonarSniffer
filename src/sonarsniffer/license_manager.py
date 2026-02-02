@@ -125,7 +125,7 @@ class LicenseManager:
             return 30
 
         expiry = datetime.fromisoformat(self.license_data["expiry_date"])
-        now = datetime.now()
+        now = datetime.now(expiry.tzinfo) if expiry.tzinfo else datetime.now()
         remaining = expiry - now
         return max(0, remaining.days)
 
