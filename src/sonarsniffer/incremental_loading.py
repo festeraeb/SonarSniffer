@@ -344,3 +344,40 @@ def process_sonar_incrementally(file_path: str, processor_func) -> Iterator[Any]
         streamer.stream_binary_chunks(), processor_func
     ):
         yield result
+
+
+# Compatibility wrapper expected by CLI and package __init__
+class IncrementalLoader:
+    """Backward-compatible loader with `load_batches()` API expected by CLI
+
+    Internally uses `StreamingDataLoader` for NetCDF and `SonarDataStreamer`
+    for binary sonar streams and `ChunkedDataProcessor` for processing.
+    """
+
+    def __init__(self, file_path: str, batch_size: int = 1000):
+        self.file_path = file_path
+        self.batch_size = batch_size
+
+    def load_batches(self):
+        """Yield batches (lists) of parsed records or raw chunks.
+
+        Tries NetCDF chunking first, falls back to streaming binary chunks.
+        """
+        # Try netCDF streaming by variable name 'data' if file appears to be netcdf
+        try:
+            with StreamingDataLoader(self.file_path, chunk_size=self.batch_size) as loader:
+                for chunk in loader.iter_time_chunks('data'):
+                    # Flatten chunks into list-like records for compatibility
+                    yield list(chunk)
+                return
+        except Exception:
+            pass
+
+        # Fall back to binary streaming: emit raw buffers as single-batch arrays
+        streamer = SonarDataStreamer(self.file_path)
+        processor = ChunkedDataProcessor()
+
+        for processed in processor.process_chunks(streamer.stream_binary_chunks(), lambda b: b):
+            # `processed` may be binary data buffers — return as a batch with one item to keep contract
+            yield [processed]
+
