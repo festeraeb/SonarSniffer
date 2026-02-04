@@ -20,7 +20,7 @@ Integration with Python
 
 Notes & limitations
 -------------------
-- The encoder will attempt to select the best encoder element using `gst_element_factory_find`-style checks and will fall back to `x264enc` if available. If real-time streaming to the encoder fails (missing plugins, broken pipe, etc.) the Python bridge will automatically perform a disk-frame fallback: it writes PNG frames to a temporary directory and invokes `ffmpeg` to encode the sequence, then cleans up the temporary frames. This provides a robust fallback for field runs.
+- The encoder will attempt to select the best encoder element using `gst_element_factory_find`-style checks. For h264/h265 encoders the code will automatically insert the appropriate parser (`h264parse` / `h265parse`) before `mp4mux` to ensure proper linking. If a hardware encoder fails to create a working pipeline (common when GPU plugins aren't available or require special contexts), the bridge will try a gst-launch pipeline that explicitly inserts the parser; if that also fails it will fall back to software `x264enc`, and as a final fallback it will write PNG frames to a temporary directory and invoke `ffmpeg` to encode the sequence. This layered fallback strategy provides robustness for field runs.
 - The pipeline includes `videoconvert` so input RGB frames are converted to the encoder's preferred format.
 - On Windows/macOS/Linux plugin availability varies; check `gst-inspect-1.0` to confirm available encoders.
 
