@@ -12,7 +12,7 @@ from typing import Iterable
 import numpy as np
 
 GST_ENCODER_PATH = os.environ.get("GST_ENCODER_PATH") or os.path.join("tools", "gstreamer_encoder", "target", "debug", "gst_encoder")
-if os.name == 'nt':
+if os.name == 'nt' and not GST_ENCODER_PATH.lower().endswith('.exe'):
     GST_ENCODER_PATH += '.exe'
 
 
@@ -92,6 +92,13 @@ def encode_frames_to_mp4(frames: Iterable[np.ndarray], output_path: str, fps: in
         raise exc_q.get()
     if proc.returncode != 0:
         stderr_text = err.decode("utf-8", errors="ignore")
+        # If the chosen hardware h264 encoder failed, try falling back to a software encoder x264enc
+        if encoder and 'h264' in encoder.lower() and encoder.lower() not in ('x264enc', 'avenc_h264'):
+            try:
+                # retry with x264enc
+                return encode_frames_to_mp4([first] + list(it), output_path, fps=fps, width=width, height=height, encoder='x264enc')
+            except Exception:
+                pass
         raise RuntimeError(f"gstreamer encoder failed: {stderr_text}")
 
     return output_path
@@ -220,6 +227,35 @@ def _encode_via_gst_image_sequence(frames_iter, output_path: str, fps: int, widt
         out, err = proc.communicate()
         if proc.returncode != 0:
             stderr_text = err.decode('utf-8', errors='ignore')
+            # If a hardware h264 encoder failed to link to mp4mux, try an explicit gst-launch pipeline that inserts h264parse
+            if encoder and 'h264' in encoder.lower():
+                gst_launch = _shutil.which('gst-launch-1.0') or _shutil.which('gst-launch')
+                if gst_launch:
+                    try:
+                        # Build gst-launch pipeline using multifilesrc -> pngdec -> videoconvert -> encoder -> h264parse -> queue -> mp4mux -> filesink
+                        loc = _shutil.os.path.join(tmpdir, 'frame_%06d.png')
+                        gst_pipeline = f"multifilesrc location={loc} index=0 ! pngdec ! videoconvert ! {encoder} ! h264parse ! queue ! mp4mux ! filesink location={output_path}"
+                        gst_cmd = [gst_launch, gst_pipeline]
+                        proc2 = _sub.Popen(gst_cmd, stdout=_sub.PIPE, stderr=_sub.PIPE, shell=False)
+                        out2, err2 = proc2.communicate()
+                        if proc2.returncode == 0:
+                            return output_path
+                        else:
+                            stderr_text2 = err2.decode('utf-8', errors='ignore')
+                            # If gst-launch failed, try a software-encoder fallback (x264enc) with the gst_encoder binary
+                            try:
+                                cmd2 = [bin_path, f"--input-dir={tmpdir}", f"--width={width}", f"--height={height}", f"--fps={fps}", f"--output={output_path}", "--encoder=x264enc"]
+                                proc3 = _sub.Popen(cmd2, stdout=_sub.PIPE, stderr=_sub.PIPE)
+                                out3, err3 = proc3.communicate()
+                                if proc3.returncode == 0:
+                                    return output_path
+                                else:
+                                    stderr_text3 = err3.decode('utf-8', errors='ignore')
+                                    raise RuntimeError(f"gst_encoder image-sequence mode failed: {stderr_text}; gst-launch failed: {stderr_text2}; x264enc attempt failed: {stderr_text3}")
+                            except Exception as ex2:
+                                raise RuntimeError(f"gst_encoder image-sequence mode failed: {stderr_text}; gst-launch failed: {stderr_text2}; x264enc attempt failed: {ex2}")
+                    except Exception as ex:
+                        raise RuntimeError(f"gst_encoder image-sequence mode failed: {stderr_text}; additionally gst-launch attempt failed: {ex}")
             raise RuntimeError(f"gst_encoder image-sequence mode failed: {stderr_text}")
         return output_path
     finally:

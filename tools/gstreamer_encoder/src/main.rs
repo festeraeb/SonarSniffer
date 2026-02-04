@@ -62,13 +62,27 @@ fn main() {
     };
     eprintln!("Using encoder: {}", enc_name);
 
-    // Build pipeline: appsrc name=src ! videoconvert ! encoder ! queue ! mp4mux ! filesink location=...
+    // Build pipeline: appsrc name=src ! videoconvert ! encoder [parse?] ! queue ! mp4mux ! filesink location=...
+    // Insert a parser element for h264/h265 encoders when necessary (e.g., nvh264enc needs h264parse before mp4mux)
+    let parse_elem = if enc_name.to_lowercase().contains("h264") || enc_name.to_lowercase().contains("264") {
+        "! h264parse"
+    } else if enc_name.to_lowercase().contains("h265") || enc_name.to_lowercase().contains("hevc") {
+        "! h265parse"
+    } else {
+        ""
+    };
+
+    if !parse_elem.is_empty() {
+        eprintln!("Inserting parser element ({}) for encoder {}", parse_elem, enc_name);
+    }
+
     let pipeline_str = format!(
-        "appsrc name=src is-live=true block=true format=time caps=video/x-raw,format=RGB,width={w},height={h},framerate={fps}/1 ! videoconvert ! {enc} ! queue ! mp4mux ! filesink location={out}",
+        "appsrc name=src is-live=true block=true format=time caps=video/x-raw,format=RGB,width={w},height={h},framerate={fps}/1 ! videoconvert ! {enc} {parse} ! queue ! mp4mux ! filesink location={out}",
         w = args.width,
         h = args.height,
         fps = args.fps,
         enc = enc_name,
+        parse = parse_elem,
         out = args.output
     );
 
@@ -86,8 +100,13 @@ fn main() {
         .downcast::<gstreamer_app::AppSrc>()
         .expect("Failed to cast to AppSrc");
 
-    // Set caps explicitly
-    let caps = gstreamer::Caps::builder("video/x-raw").field("format", &"RGB").build();
+    // Set caps explicitly including width/height/framerate so downstream elements can negotiate
+    let caps = gstreamer::Caps::builder("video/x-raw")
+        .field("format", &"RGB")
+        .field("width", &(args.width as i32))
+        .field("height", &(args.height as i32))
+        .field("framerate", &gstreamer::Fraction::new(args.fps as i32, 1))
+        .build();
     appsrc.set_caps(Some(&caps));
     appsrc.set_max_bytes(0);
 
