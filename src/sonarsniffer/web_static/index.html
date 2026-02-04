@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SonarSniffer Outputs (UI Prototype)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;margin:20px}
+    .list{display:flex;flex-wrap:wrap;gap:12px}
+    .card{border:1px solid #ddd;padding:8px;width:320px}
+    .meta{font-size:12px;color:#666}
+    img{max-width:100%;height:auto}
+  </style>
+</head>
+<body>
+  <h1>SonarSniffer Outputs (Prototype)</h1>
+  <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center">
+    <button id="startRun">Start Holloway Run</button>
+    <span id="runStatus"></span>
+  </div>
+  <div id="content">Loading...</div>
+  <h3>Live Logs</h3>
+  <pre id="logs" style="height:240px;overflow:auto;border:1px solid #ccc;padding:8px;background:#111;color:#fff"></pre>
+
+  <script>
+    let currentJob = null;
+    let ws = null;
+    document.getElementById('startRun').addEventListener('click', async ()=>{
+      const r = await fetch('/api/run/holloway', {method:'POST'});
+      if (!r.ok) { alert('Failed to start run'); return; }
+      const j = await r.json();
+      currentJob = j.job_id;
+      document.getElementById('runStatus').innerText = `Job: ${currentJob}`;
+      connectWS(currentJob);
+      pollJob(currentJob);
+    });
+
+    async function pollJob(jobId){
+      try{
+        const r = await fetch(`/api/run/${jobId}`);
+        if (!r.ok) return;
+        const info = await r.json();
+        if (info.status && info.status !== 'running' && info.status !== 'queued'){
+          document.getElementById('runStatus').innerText += ` — ${info.status}`;
+        } else {
+          setTimeout(()=>pollJob(jobId), 2000);
+        }
+      }catch(e){ setTimeout(()=>pollJob(jobId), 2000);}
+    }
+
+    function connectWS(jobId){
+      if (ws){ try{ ws.close() }catch(e){} }
+      const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + `/ws/logs/${jobId}`;
+      ws = new WebSocket(url);
+      const logs = document.getElementById('logs');
+      ws.onmessage = (ev)=>{ logs.textContent += ev.data + '\n'; logs.scrollTop = logs.scrollHeight; }
+      ws.onopen = ()=>{ logs.textContent += '[WS connected]\n'; }
+      ws.onclose = ()=>{ logs.textContent += '[WS closed]\n'; }
+    }
+
+    async function load() {
+      const r = await fetch('/api/outputs');
+      if (!r.ok) { document.getElementById('content').innerText = 'Failed to load outputs'; return; }
+      const items = await r.json();
+      const out = document.createElement('div'); out.className='list';
+      items.forEach(i => {
+        const node = document.createElement('div'); node.className='card';
+        const p = document.createElement('p'); p.innerText = i.path; node.appendChild(p);
+        if (i.path.match(/\.png$|\.jpg$|\.gif$/i)){
+          const img = document.createElement('img'); img.src = '/outputs/' + i.path; node.appendChild(img);
+        }
+        if (i.path.match(/\.mp4$|\.mov$/i)){
+          const v = document.createElement('video'); v.controls=true; v.src = '/outputs/' + i.path; v.style.maxWidth='100%'; node.appendChild(v);
+        }
+        const m = document.createElement('div'); m.className='meta'; m.innerText = `${Math.round(i.size/1024)} KB`; node.appendChild(m);
+        out.appendChild(node);
+      });
+      const c = document.getElementById('content'); c.innerHTML=''; c.appendChild(out);
+    }
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  sonarsniffer:
+    build: .
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./outputs:/app/outputs
+    environment:
+      - SONARS_OUTPUT_DIR=/app/outputs
+      - SONARS_HOST=0.0.0.0
+      - SONARS_PORT=8081
+    restart: unless-stopped
