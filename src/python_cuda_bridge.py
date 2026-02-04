@@ -12,13 +12,15 @@ from typing import Iterable
 import numpy as np
 
 
-def encode_frames_to_mp4(frames: Iterable[np.ndarray], output_path: str, fps: int = 30) -> str:
+def encode_frames_to_mp4(frames: Iterable[np.ndarray], output_path: str, fps: int = 30, output_height: int | None = None) -> str:
     """Encode frames to MP4 using ffmpeg (software encoding).
 
     Args:
         frames: Iterable of numpy arrays (H x W) or (H x W x 3) uint8
         output_path: Path to write MP4 file
         fps: Frames per second
+        output_height: optional output height in pixels; if provided ffmpeg will
+                       scale the video to (width x output_height) during encoding
 
     Returns:
         Path to written file (string)
@@ -46,7 +48,7 @@ def encode_frames_to_mp4(frames: Iterable[np.ndarray], output_path: str, fps: in
 
     h, w = first_frame.shape[:2]
 
-    # Build ffmpeg command
+    # Build ffmpeg command up to reading stdin
     cmd = [
         ffmpeg_exe,
         '-y',
@@ -56,6 +58,14 @@ def encode_frames_to_mp4(frames: Iterable[np.ndarray], output_path: str, fps: in
         '-s', f'{w}x{h}',
         '-r', str(fps),
         '-i', '-',
+    ]
+
+    # If an output height is requested and differs from input, add a scale filter
+    if output_height is not None and output_height > 0 and output_height != h:
+        cmd += ['-vf', f'scale={w}:{int(output_height)}']
+
+    # Continue with audio/encoding settings
+    cmd += [
         '-an',
         '-vcodec', 'libx264',
         '-pix_fmt', 'yuv420p',
@@ -64,25 +74,86 @@ def encode_frames_to_mp4(frames: Iterable[np.ndarray], output_path: str, fps: in
 
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    try:
-        # Write first frame and remaining frames to stdin
-        def to_rgb_bytes(frame: np.ndarray) -> bytes:
-            if frame.ndim == 2:
-                rgb = np.stack([frame, frame, frame], axis=-1)
-            elif frame.ndim == 3 and frame.shape[2] == 3:
-                rgb = frame
+    # Stream frames from a dedicated writer thread so a slow/blocked ffmpeg
+    # doesn't hang the caller during large video exports. Make timeout
+    # configurable via FFMPEG_ENCODE_TIMEOUT (seconds).
+    import threading
+    import queue
+    import os
+
+    timeout = int(os.environ.get('FFMPEG_ENCODE_TIMEOUT', '600'))
+    exc_q: "queue.Queue[Exception]" = queue.Queue()
+
+    def to_rgb_bytes(frame: np.ndarray) -> bytes:
+        if frame.ndim == 2:
+            rgb = np.stack([frame, frame, frame], axis=-1)
+        elif frame.ndim == 3 and frame.shape[2] == 3:
+            rgb = frame
+        else:
+            raise RuntimeError("Unsupported frame shape for encoding")
+        return rgb.tobytes()
+
+    def writer_thread_fn():
+        try:
+            # write the first frame we already peeked
+            proc.stdin.write(to_rgb_bytes(first_frame))
+            for frame in frames:
+                proc.stdin.write(to_rgb_bytes(frame))
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+        except BrokenPipeError:
+            # ffmpeg closed stdin (e.g., codec error). Try to capture stderr to provide a
+            # more helpful message for diagnostics.
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            stderr_text = ''
+            try:
+                err = proc.stderr.read()
+                if err:
+                    stderr_text = err.decode('utf-8', errors='ignore')
+            except Exception:
+                stderr_text = ''
+            msg = "ffmpeg closed stdin (broken pipe) during write"
+            if stderr_text:
+                msg = f"{msg}; ffmpeg stderr: {stderr_text}"
+            exc_q.put(RuntimeError(msg))
+        except Exception as e:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            stderr_text = ''
+            try:
+                err = proc.stderr.read()
+                if err:
+                    stderr_text = err.decode('utf-8', errors='ignore')
+            except Exception:
+                stderr_text = ''
+            if stderr_text:
+                exc_q.put(RuntimeError(f"write failed: {e}; ffmpeg stderr: {stderr_text}"))
             else:
-                raise RuntimeError("Unsupported frame shape for encoding")
-            return rgb.tobytes()
+                exc_q.put(e)
+        finally:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
 
-        proc.stdin.write(to_rgb_bytes(first_frame))
-        for frame in frames:
-            proc.stdin.write(to_rgb_bytes(frame))
+    writer = threading.Thread(target=writer_thread_fn, daemon=True)
+    writer.start()
 
-        proc.stdin.close()
-        out, err = proc.communicate(timeout=120)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        # If writer raised an exception, surface it here
+        if not exc_q.empty():
+            raise exc_q.get()
         if proc.returncode != 0:
-            raise RuntimeError(f"ffmpeg failed: {err.decode('utf-8', errors='ignore')}" )
+            stderr_text = err.decode('utf-8', errors='ignore')
+            raise RuntimeError(f"ffmpeg failed: {stderr_text}")
 
     except subprocess.TimeoutExpired:
         proc.kill()
