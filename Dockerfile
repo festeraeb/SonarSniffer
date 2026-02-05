@@ -4,11 +4,20 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
-# System deps (add as needed for production like gstreamer, ffmpeg etc.)
+# System deps (runtime tools needed for full pipeline: ffmpeg, gstreamer, and GDAL)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     git \
+    ffmpeg \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gdal-bin \
+    libgdal-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only required files to keep image small
