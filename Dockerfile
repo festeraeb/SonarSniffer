@@ -11,16 +11,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy project
-COPY . /app
+# Copy only required files to keep image small
+COPY requirements.txt /app/requirements.txt
 
-# Install Python deps
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+# Install Python deps early so they are cached when only code changes
+RUN pip install --upgrade pip && pip install --no-cache-dir -r /app/requirements.txt
+
+# Copy source and scripts only
+COPY src/ /app/src/
+COPY scripts/ /app/scripts/
+COPY LICENSE README.md /app/
 
 # Expose port
 EXPOSE 8081
 
 ENV SONARS_OUTPUT_DIR=/app/outputs
+ENV PYTHONPATH=/app/src
 
 # Start uvicorn
 CMD ["uvicorn","sonarsniffer.web:app","--host","0.0.0.0","--port","8081","--lifespan","on"]

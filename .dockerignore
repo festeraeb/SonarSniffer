@@ -1,0 +1,17 @@
+venv_gst/
+outputs/
+__pycache__/
+*.pyc
+.env
+.vscode/
+.git/
+.DS_Store
+
+# Build artifacts and heavy folders
+**/target/
+tools/**/target/
+rust_core/target/
+**/*.mp4
+**/*.mbtiles
+**/*.tif
+**/*.kmz
