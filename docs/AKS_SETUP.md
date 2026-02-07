@@ -43,3 +43,21 @@ Quick tests I ran to validate stack:
 Notes:
 - Key Vault integration is scaffolded via `helm/sonarsniffer/templates/secretproviderclass.yaml`. It requires identity (Workload Identity or Managed Identity) and Key Vault access to work in production.
 - The CI workflow (.github/workflows/ci-deploy.yml) is a starter; add GitHub secrets for ACR and Azure service principal to enable automatic build-and-deploy.
+Remaining manual steps (quick checklist):
+1. Install Secrets Store CSI Driver (required on cluster):
+   - Recommended: install with Helm: `helm repo add secrets-store-csi-driver https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts && helm upgrade --install csi-secrets-store secrets-store-csi-driver/secrets-store-csi-driver --namespace kube-system` (or use the project's manifests).
+2. Provision Key Vault secrets and grant access:
+   - Create secrets in your Key Vault (e.g., `SENTRY-DSN`) and/or migrate existing secrets.
+   - Grant the identity that will access Key Vault (either the kubelet managed identity or a dedicated AAD app / user-assigned identity) the **Key Vault Secrets User** RBAC role on the vault.
+3. Workload Identity (optional, recommended):
+   - If you prefer Workload Identity over VM-managed identity, create an AAD app and add a federated credential that maps the cluster OIDC issuer and the service account subject `system:serviceaccount:sonarsniffer:sonarsniffer-sa` → then grant it access to Key Vault.
+   - I attempted to create an AAD app but lacked directory application-create permissions; if you want me to finish this step, I need directory app registration privileges.
+4. Update values and deploy:
+   - Set `helm/sonarsniffer/values.yaml` `keyVault.enabled=true` and `keyVault.keyVaultName=<your-kv>` and `keyVault.tenantId=<tenant>` then `helm upgrade --install`.
+5. Configure CI secrets and test pipeline:
+   - Add GitHub secrets: `AZURE_CREDENTIALS` (service principal JSON), `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`.
+   - Trigger a push to `main` (or open a PR) to exercise `.github/workflows/ci-deploy.yml`.
+6. TLS & DNS for production:
+   - Create DNS record for the ingress host and switch the `cert-manager` ClusterIssuer to `letsencrypt` (production) once DNS is live.
+
+If you want, I can continue and (a) install the CSI driver via Helm, (b) finish Workload Identity app registration if you grant directory permissions, and (c) set up CI secrets if you provide them or add them to the GitHub repo. Let me know which of these I should tackle next and I'll proceed.
