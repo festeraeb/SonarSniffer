@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sonarsniffer-ingress
+  namespace: sonarsniffer
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "selfsigned-issuer"
+spec:
+  rules:
+    - host: sonarsniffer.20.80.36.143.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sonarsniffer
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - sonarsniffer.20.80.36.143.nip.io
+      secretName: sonarsniffer-tls

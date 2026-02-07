@@ -33,7 +33,7 @@ spec:
           image: shipwreckacr.azurecr.io/sonarsniffer:nightly-202602062309
           imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 8080
+            - containerPort: 8081
           env:
             - name: SENTRY_DSN
               valueFrom:
@@ -53,4 +53,4 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 8080
+      targetPort: 8081
