@@ -30,6 +30,11 @@ keyVault:
   keyVaultName: "shipwreck-kv-20260207"
   tenantId: "248d303d-da77-4073-8a7b-d6640600a793"
   secretProviderClassName: "sonarsniffer-kv-spc"
+  # If true, the chart will create a ClusterRole/ClusterRoleBinding to allow the
+  # Secrets Store CSI driver to sync secrets into Kubernetes (equivalent to
+  # upstream rbac-secretprovidersyncing.yaml). Set to false if you prefer to
+  # manage RBAC cluster-wide separately.
+  createSecretSyncRBAC: true
 resources: {}
 nodeSelector: {}
 tolerations: []
