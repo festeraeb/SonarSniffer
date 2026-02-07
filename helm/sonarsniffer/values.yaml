@@ -35,6 +35,10 @@ keyVault:
   # upstream rbac-secretprovidersyncing.yaml). Set to false if you prefer to
   # manage RBAC cluster-wide separately.
   createSecretSyncRBAC: true
+  # Use Workload Identity (Azure AD federated credential) instead of VM-managed identity.
+  # When enabled, set `workloadIdentityClientId` to the app's client ID.
+  useWorkloadIdentity: false
+  workloadIdentityClientId: ""
 resources: {}
 nodeSelector: {}
 tolerations: []
