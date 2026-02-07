@@ -29,16 +29,21 @@ spec:
                   key: SENTRY_DSN
           livenessProbe:
             httpGet:
-              path: /health/liveness
+              path: {{ .Values.probes.livenessPath }}
               port: 8081
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 2
           readinessProbe:
             httpGet:
-              path: /health/ready
+              path: {{ .Values.probes.readinessPath }}
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 2
-          resources: {{ toYaml .Values.resources | nindent 10 }}
+          {{- if .Values.resources }}
+          resources:
+{{ toYaml .Values.resources | nindent 12 }}
+          {{- else }}
+          resources: {}
+          {{- end }}

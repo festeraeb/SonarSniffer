@@ -1,10 +1,68 @@
 #!/usr/bin/env python3
 # core_shared.py — shared helpers (varstruct, CRC, magic scan, progress)
 
+import os
 import struct
 
 MAGIC_REC_HDR = 0xB7E9DA86  # header magic (little-endian value)
 MAGIC_REC_TRL = 0xD9264B7C  # trailer magic (little-endian value)
+
+# Allow registration of alternate header magic values found in different Garmin
+# firmware revisions. These can be registered at runtime or loaded from a
+# small file to make the parser tolerant to moved/changed magic bytes.
+MAGIC_REC_HDR_CANDIDATES = [MAGIC_REC_HDR]
+
+def register_magic_hdr(value: int):
+    """Register an alternate 32-bit magic header value (int)."""
+    if value not in MAGIC_REC_HDR_CANDIDATES:
+        MAGIC_REC_HDR_CANDIDATES.append(value)
+
+
+def load_magic_hdrs_from_file(path: str):
+    """Load candidate magic ints from a plaintext file (one hex value per line).
+
+    Lines may be like '0xB7E9DA86' or 'B7E9DA86'. Invalid lines skipped.
+    """
+    try:
+        with open(path, 'r', encoding='utf-8') as fh:
+            for ln in fh:
+                ln = ln.strip().lower()
+                if not ln or ln.startswith('#'): continue
+                if ln.startswith('0x'):
+                    ln = ln[2:]
+                try:
+                    val = int(ln, 16)
+                    register_magic_hdr(val)
+                except Exception:
+                    pass
+    except FileNotFoundError:
+        return
+
+# Auto-load a small candidate file if present in the repository root. This lets
+# users keep a hand-edited 'garmin_magic_variants.txt' file (one hex per line)
+# in the repo or in their local working dir; when present the parser will
+# automatically accept those header variants.
+try:
+    if os.path.exists('garmin_magic_variants.txt'):
+        load_magic_hdrs_from_file('garmin_magic_variants.txt')
+except Exception:
+    pass
+
+
+def find_first_magic(mm, candidate_bytes_list, start, end):
+    """Find the earliest occurrence of any candidate magic bytes in mm.
+
+    Returns a tuple (index, matched_bytes) where matched_bytes is the
+    candidate bytes that matched, or (-1, None) if not found.
+    """
+    best_idx = -1
+    best_candidate = None
+    for cb in candidate_bytes_list:
+        idx = mm.find(cb, start, end)
+        if idx != -1 and (best_idx == -1 or idx < best_idx):
+            best_idx = idx
+            best_candidate = cb
+    return best_idx, best_candidate
 
 _progress_hook = None
 def set_progress_hook(fn):  # fn(percent_float, message)

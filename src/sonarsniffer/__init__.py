@@ -17,6 +17,11 @@ __license__ = "Proprietary"
 from .license_manager import LicenseManager
 from .sonar_parser import SonarParser
 from .web_dashboard_generator import WebDashboardGenerator
+# Export telemetry module for convenient package-level imports
+try:
+    from . import telemetry as telemetry
+except Exception:
+    telemetry = None
 
 # Optional optimization modules
 try:

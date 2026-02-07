@@ -40,6 +40,10 @@ keyVault:
   useWorkloadIdentity: false
   workloadIdentityClientId: ""
 resources: {}
+# Liveness/readiness probe paths. Defaulting to '/' keeps pods healthy when older images lack /health endpoints.
+probes:
+  livenessPath: "/"
+  readinessPath: "/"
 nodeSelector: {}
 tolerations: []
 serviceAccount:

@@ -40,17 +40,356 @@ from .canonical import Scan
 from PIL import Image
 
 
-def scans_to_waterfall_image(scans: Iterable[Scan], output_path: str, width: int = None):
-    """Build a vertical waterfall image from Scan objects and save PNG."""
+# Palette mapping helper
+def apply_palette(arr: np.ndarray, palette: str) -> np.ndarray:
+    """Map a 2D uint8 grayscale array to an RGB uint8 array according to named palette."""
+    a = np.asarray(arr, dtype=np.uint8)
+    v = a.astype(np.float32) / 255.0
+    h, w = a.shape
+    # Default grayscale
+    if not palette:
+        return np.stack([a, a, a], axis=-1)
+    p = palette.lower()
+    if p == "amber":
+        r = a
+        g = np.clip((a.astype(np.float32) * 0.75), 0, 255).astype(np.uint8)
+        b = np.zeros_like(a, dtype=np.uint8)
+        return np.stack([r, g, b], axis=-1)
+    if p == "blue":
+        r = np.clip((v * 0.20 * 255.0), 0, 255).astype(np.uint8)
+        g = np.clip((v * 0.60 * 255.0), 0, 255).astype(np.uint8)
+        b = np.clip((v * 1.00 * 255.0), 0, 255).astype(np.uint8)
+        return np.stack([r, g, b], axis=-1)
+    if p == "green":
+        r = np.clip((v * 0.20 * 255.0), 0, 255).astype(np.uint8)
+        g = np.clip((v * 1.00 * 255.0), 0, 255).astype(np.uint8)
+        b = np.clip((v * 0.20 * 255.0), 0, 255).astype(np.uint8)
+        return np.stack([r, g, b], axis=-1)
+    if p == "yellow":
+        r = np.clip((v * 1.00 * 255.0), 0, 255).astype(np.uint8)
+        g = np.clip((v * 0.90 * 255.0), 0, 255).astype(np.uint8)
+        b = np.clip((v * 0.10 * 255.0), 0, 255).astype(np.uint8)
+        return np.stack([r, g, b], axis=-1)
+    if p in ("pink", "purple-pink"):
+        r = np.clip((v * 1.00 * 255.0), 0, 255).astype(np.uint8)
+        g = np.clip((v * 0.30 * 255.0), 0, 255).astype(np.uint8)
+        b = np.clip((v * 0.90 * 255.0), 0, 255).astype(np.uint8)
+        return np.stack([r, g, b], axis=-1)
+    if p in ("red", "orange", "copper"):
+        r = np.clip((v * 1.00 * 255.0), 0, 255).astype(np.uint8)
+        g = np.clip((v * 0.40 * 255.0), 0, 255).astype(np.uint8)
+        b = np.clip((v * 0.10 * 255.0), 0, 255).astype(np.uint8)
+        return np.stack([r, g, b], axis=-1)
+    if p in ("classic", "multi", "classic multi"):
+        # low->blue, mid->green, high->red gradient
+        c0 = np.array([0, 0, 255], dtype=np.float32)
+        c1 = np.array([0, 255, 0], dtype=np.float32)
+        c2 = np.array([255, 0, 0], dtype=np.float32)
+        t = v * 2.0
+        t0 = np.clip(t, 0.0, 1.0)
+        t1 = np.clip(t - 1.0, 0.0, 1.0)
+        col = np.zeros((h, w, 3), dtype=np.float32)
+        col += (1.0 - t0)[..., None] * c0
+        col += t0[..., None] * (1.0 - t1)[..., None] * c1
+        col += t1[..., None] * c2
+        return np.clip(col, 0, 255).astype(np.uint8)
+    if p in ("night", "inverted"):
+        inv = (255 - a).astype(np.uint8)
+        return apply_palette(inv, "classic")
+    # fallback grayscale
+    return np.stack([a, a, a], axis=-1)
+
+
+def scans_to_waterfall_image(
+    scans: Iterable[Scan],
+    output_path: str,
+    width: int = None,
+    color: str | None = "amber",
+    merge_channels: bool = True,
+    channel_gap: int = 16,
+    pairing_debug: bool = False,
+    alignment_mode: str = "auto",
+    debug_out: str | None = None,
+    beam_gain: bool = False,
+    nadir_mask: int = 0,
+):
+    """Build a vertical waterfall image from Scan objects and save PNG.
+
+    If `color=='amber'` the grayscale waterfall will be mapped to an amber
+    RGB palette to improve contrast for visual inspection and video outputs.
+
+    When `merge_channels=True` and consecutive scans share the same `seq` but
+    different `channel_id`, they will be merged horizontally into a single
+    row by placing the higher channel id on the left and flipping it horizontally
+    (this matches common port/starboard conventions for Garmin RSD files).
+    """
+    # Convert iterable to list of Scan to allow lookahead grouping
+    scans_list = list(scans)
     rows = []
     max_width = 0
-    for s in scans:
+
+    # Preprocess scans (beam-angle gain compensation, nadir masking)
+    def _preprocess_scan(s: Scan):
+        arr = None
+        if s.samples is None:
+            return None
+        arr = np.asarray(s.samples, dtype=np.float32).copy()
+        applied_gain = 1.0
+        masked = 0
+        # Beam-angle gain correction (normalize amplitude vs beam angle)
+        if beam_gain and s.beam_deg is not None:
+            try:
+                import math
+
+                theta = math.radians(float(s.beam_deg) or 0.0)
+                cosv = max(0.2, abs(math.cos(theta)))
+                # divide by cos to compensate for spreading loss (capped)
+                applied_gain = 1.0 / cosv
+                # Avoid extreme amplification
+                applied_gain = min(applied_gain, 4.0)
+                arr = arr * (1.0 / applied_gain)
+            except Exception:
+                applied_gain = 1.0
+        # Nadir masking: zero out central samples to remove near-transducer artifact
+        if nadir_mask and nadir_mask > 0:
+            mid = arr.size // 2
+            lo = max(0, int(mid - nadir_mask))
+            hi = min(arr.size, int(mid + nadir_mask))
+            arr[lo:hi] = 0
+            masked = hi - lo
+        # store debug metrics in metadata for later use
+        s.metadata = dict(s.metadata or {})
+        s.metadata.update(
+            {
+                "applied_gain": float(applied_gain),
+                "nadir_masked": int(masked),
+                "peak_pos": int(np.argmax(arr)) if arr.size > 0 else None,
+                "mean": float(np.mean(arr)) if arr.size > 0 else 0.0,
+            }
+        )
+        return arr
+
+    # If requested, first group by sequence id and compose pairs using a
+    # seam-minimization heuristic. This is more robust than only checking
+    # immediate neighbors and handles interleaved or non-adjacent channel records.
+    def _compose_pairwise(group: list) -> list:
+        out_rows = []
+        for items in group:
+            if len(items) == 1:
+                s = items[0]
+                if s.samples is None:
+                    continue
+                pr = _preprocess_scan(s)
+                if pr is None:
+                    continue
+                out_rows.append(pr)
+                continue
+            # Select two channels (if more than two, take first two after sorting by channel_id)
+            try:
+                items_sorted = sorted(
+                    items, key=lambda x: x.metadata.get("channel_id", 0)
+                )
+            except Exception:
+                items_sorted = items[:2]
+            # Apply preprocessing to both channels so beam/nadir corrections are consistent
+            pa = _preprocess_scan(items_sorted[0])
+            pb = _preprocess_scan(items_sorted[1])
+            # Fallback to raw samples if preprocessing returned None
+            a = (
+                pa
+                if pa is not None
+                else np.asarray(items_sorted[0].samples, dtype=np.float32)
+            )
+            b = (
+                pb
+                if pb is not None
+                else np.asarray(items_sorted[1].samples, dtype=np.float32)
+            )
+            L = max(a.size, b.size)
+            if a.size < L:
+                a = np.concatenate([a, np.zeros(L - a.size, dtype=a.dtype)])
+            else:
+                a = a[:L]
+            if b.size < L:
+                b = np.concatenate([b, np.zeros(L - b.size, dtype=b.dtype)])
+            else:
+                b = b[:L]
+            # Try both orders and flips and pick the one minimizing seam discontinuity
+            # Add a small horizontal gap between channels to avoid seam overlap
+            gap_arr = np.zeros(channel_gap, dtype=a.dtype)
+            candidates = []
+            # order (a left, b right)
+            candidates.append((np.concatenate([a[::-1], gap_arr, b]), "a_reversed_b"))
+            candidates.append((np.concatenate([a, gap_arr, b]), "a_b"))
+            candidates.append((np.concatenate([b[::-1], gap_arr, a]), "b_reversed_a"))
+            candidates.append((np.concatenate([b, gap_arr, a]), "b_a"))
+
+            def seam_error(arr):
+                # measure absolute difference at seam region (16 pixels)
+                mid = arr.size // 2
+                left_tail = arr[mid - 8 : mid]
+                right_head = arr[mid : mid + 8]
+                return float(np.sum(np.abs(left_tail - right_head)))
+
+            # Score candidates and pick best; optionally use alignment preference
+            scored = [(cand, label, seam_error(cand)) for (cand, label) in candidates]
+            if alignment_mode and alignment_mode != "auto":
+                # compute peak distance-from-center metric for each candidate
+                metrics = []
+                for cand, label, seam in scored:
+                    arr = np.asarray(cand, dtype=np.float32)
+                    mid = arr.size // 2
+                    peak = int(np.argmax(arr))
+                    dist = abs(peak - mid)
+                    metrics.append((cand, label, seam, dist))
+                if alignment_mode == "outer":
+                    # prefer larger distance from center; tiebreak with lower seam
+                    chosen = max(metrics, key=lambda x: (x[3], -x[2]))
+                else:
+                    # inner -> prefer closer to center then lower seam
+                    chosen = min(metrics, key=lambda x: (x[3], x[2]))
+                best = (chosen[0], chosen[1], float(chosen[2]))
+            else:
+                best = min(scored, key=lambda x: x[2])
+            out_rows.append(best[0])
+            if pairing_debug and debug_out is not None:
+                try:
+                    from pathlib import Path
+                    import csv
+
+                    dbgdir = Path(debug_out) / "pairing_debug"
+                    dbgdir.mkdir(parents=True, exist_ok=True)
+                    csvf = dbgdir / "pairing_debug.csv"
+                    write_header = not csvf.exists()
+                    with csvf.open("a", newline="") as fh:
+                        w = csv.writer(fh)
+                        if write_header:
+                            w.writerow(
+                                [
+                                    "seq_key",
+                                    "chosen_label",
+                                    "seam",
+                                    "left_len",
+                                    "right_len",
+                                ]
+                            )
+                        seq_key = None
+                        try:
+                            seq_key = (
+                                items[0].metadata.get("seq")
+                                if isinstance(items[0].metadata, dict)
+                                else None
+                            )
+                        except Exception:
+                            seq_key = None
+                        left_len = a.size
+                        right_len = b.size
+                        # include preprocessing info if available
+                    peak = None
+                    applied_gain = None
+                    nadir_masked = None
+                    try:
+                        # peek into the input Scan objects
+                        left_meta = (
+                            items_sorted[0].metadata
+                            if hasattr(items_sorted[0], "metadata")
+                            else {}
+                        )
+                        right_meta = (
+                            items_sorted[1].metadata
+                            if hasattr(items_sorted[1], "metadata")
+                            else {}
+                        )
+                        # prefer the combined candidate's peak if available
+                        peak = left_meta.get("peak_pos") or right_meta.get("peak_pos")
+                        applied_gain = left_meta.get("applied_gain") or right_meta.get(
+                            "applied_gain"
+                        )
+                        nadir_masked = left_meta.get("nadir_masked") or right_meta.get(
+                            "nadir_masked"
+                        )
+                    except Exception:
+                        pass
+                    w.writerow(
+                        [
+                            str(seq_key),
+                            best[1],
+                            float(best[2]),
+                            int(left_len),
+                            int(right_len),
+                            peak,
+                            applied_gain,
+                            nadir_masked,
+                        ]
+                    )
+                    # Save a small thumbnail for first few pairs with overlay
+                    thumb_count_file = dbgdir / ".count"
+                    count = 0
+                    if thumb_count_file.exists():
+                        try:
+                            count = int(thumb_count_file.read_text())
+                        except Exception:
+                            count = 0
+                    if count < 50:
+                        # Normalize composite to uint8 for thumbnail
+                        comp = best[0]
+                        mn = float(comp.min())
+                        mx = float(comp.max())
+                        rng = mx - mn if mx != mn else 1.0
+                        norm = ((comp - mn) / rng * 255.0).astype(np.uint8)
+                        imt = Image.fromarray(norm).convert("RGB")
+                        try:
+                            from PIL import ImageDraw, ImageFont
+
+                            draw = ImageDraw.Draw(imt)
+                            wdt = imt.width
+                            hgt = imt.height
+                            # mark seam center
+                            cx = wdt // 2
+                            draw.line([(cx, 0), (cx, hgt)], fill=(255, 0, 0), width=1)
+                            # mark peak if available
+                            if peak is not None:
+                                px = int(peak)
+                                if px >= 0 and px < wdt:
+                                    draw.line(
+                                        [(px, 0), (px, hgt)], fill=(0, 255, 0), width=1
+                                    )
+                            # annotate gain/mask
+                            text = (
+                                f"gain={applied_gain:.2f}"
+                                if applied_gain is not None
+                                else ""
+                            )
+                            if nadir_masked is not None:
+                                text += f" mask={nadir_masked}"
+                            if text:
+                                draw.text((4, 4), text, fill=(255, 255, 0))
+                        except Exception:
+                            pass
+                        Image.fromarray(np.asarray(imt)).save(
+                            str(dbgdir / f"pair_{seq_key}_{count}.png")
+                        )
+                        thumb_count_file.write_text(str(count + 1))
+                except Exception:
+                    pass
+        return out_rows
+
+    # Build groups by seq preserving original order of sequences
+    from collections import OrderedDict, defaultdict
+
+    groups = OrderedDict()
+    for s in scans_list:
         if s.samples is None:
             continue
-        arr = np.asarray(s.samples, dtype=np.float32)
+        seq = s.metadata.get("seq") if isinstance(s.metadata, dict) else None
+        key = seq if seq is not None else f"_single_{s.id}"
+        groups.setdefault(key, []).append(s)
+
+    composed_rows = _compose_pairwise(list(groups.values()))
+
+    for arr in composed_rows:
         # Normalize sample length if needed
         if width is not None:
-            # Resample or truncate/pad
             if arr.size < width:
                 pad = np.zeros(width - arr.size, dtype=arr.dtype)
                 arr = np.concatenate([arr, pad])
@@ -75,41 +414,248 @@ def scans_to_waterfall_image(scans: Iterable[Scan], output_path: str, width: int
 
     img8 = np.asarray(generate_sidescan_waterfall(flat.tolist(), W, H), dtype=np.uint8).reshape((H, W))
     im = Image.fromarray(img8, mode='L')
-    im.save(output_path)
+
+    # Apply color mapping if requested
+    arr = np.asarray(im, dtype=np.uint8)
+    if color and color.lower() != "grayscale":
+        rgb = apply_palette(arr, color)
+        Image.fromarray(rgb, mode="RGB").save(output_path)
+    else:
+        im.save(output_path)
     return output_path
 
 
-def scans_to_video(scans: Iterable[Scan], output_path: str, fps: int = 10, width: int = None):
-    # Build frames as RGB by stretching grayscale into 3 channels
+def scans_to_video(
+    scans: Iterable[Scan],
+    output_path: str,
+    fps: int = 5,
+    width: int = None,
+    color: str | None = "amber",
+    merge_channels: bool = True,
+    height: int = 256,
+    scans_per_frame: int = 1,
+    channel_gap: int = 16,
+    pairing_debug: bool = False,
+    alignment_mode: str = "auto",
+    debug_out: str | None = None,
+    beam_gain: bool = False,
+    nadir_mask: int = 0,
+):
+    # Build frames as RGB by stretching grayscale into 3 channels (or map to color)
+    # Build a rolling waterfall buffer so each frame shows a moving window of recent pings
+    H = height
+    buffer = []  # list of 1D arrays (latest appended at end)
     frames = []
-    for s in scans:
+    W = width
+
+    # Helper to pad existing rows in buffer when W grows
+    def _pad_buffer_rows(new_W: int):
+        for idx, row in enumerate(buffer):
+            if row.size < new_W:
+                buffer[idx] = np.concatenate(
+                    [row, np.zeros(new_W - row.size, dtype=row.dtype)]
+                )
+
+    # Compose scans into rows similar to waterfall (including merge of channel pairs)
+    scans_list = list(scans)
+    # Build groups by seq preserving original order of sequences
+    from collections import OrderedDict
+
+    groups = OrderedDict()
+    for s in scans_list:
         if s.samples is None:
             continue
-        arr = np.asarray(s.samples, dtype=np.float32)
-        if width is not None:
-            if arr.size < width:
-                pad = np.zeros(width - arr.size, dtype=arr.dtype)
-                arr = np.concatenate([arr, pad])
-            elif arr.size > width:
-                arr = arr[:width]
-        # Create 2D image one-ping tall for consistency then resize to small HxW
-        H = 64
-        W = width or arr.size
-        img8 = np.asarray(generate_sidescan_waterfall(arr.tolist(), W, 1), dtype=np.uint8).reshape((1, W))
-        # Upsample vertically to H
-        frame = np.repeat(img8, H, axis=0)
-        frame_rgb = np.stack([frame, frame, frame], axis=-1)
+        seq = s.metadata.get("seq") if isinstance(s.metadata, dict) else None
+        key = seq if seq is not None else f"_single_{s.id}"
+        groups.setdefault(key, []).append(s)
+
+    # Reuse the same compose heuristic used by waterfall: try simple orders and flips
+    def _compose_item(items):
+        if len(items) == 1:
+            s = items[0]
+            pr = _preprocess_scan(s)
+            return pr if pr is not None else np.asarray(s.samples, dtype=np.float32)
+        try:
+            items_sorted = sorted(items, key=lambda x: x.metadata.get("channel_id", 0))
+        except Exception:
+            items_sorted = items[:2]
+        a = np.asarray(items_sorted[0].samples, dtype=np.float32)
+        b = np.asarray(items_sorted[1].samples, dtype=np.float32)
+        L = max(a.size, b.size)
+        if a.size < L:
+            a = np.concatenate([a, np.zeros(L - a.size, dtype=a.dtype)])
+        else:
+            a = a[:L]
+        if b.size < L:
+            b = np.concatenate([b, np.zeros(L - b.size, dtype=b.dtype)])
+        else:
+            b = b[:L]
+        gap_arr = np.zeros(channel_gap, dtype=a.dtype)
+        candidates = [
+            (np.concatenate([a[::-1], gap_arr, b]), "a_reversed_b"),
+            (np.concatenate([a, gap_arr, b]), "a_b"),
+            (np.concatenate([b[::-1], gap_arr, a]), "b_reversed_a"),
+            (np.concatenate([b, gap_arr, a]), "b_a"),
+        ]
+
+        def seam_err(arr):
+            mid = arr.size // 2
+            left_tail = arr[mid - 8 : mid]
+            right_head = arr[mid : mid + 8]
+            return float(np.sum(np.abs(left_tail - right_head)))
+
+        scored = [(cand, label, seam_err(cand)) for (cand, label) in candidates]
+        # Apply alignment mode preference (outer/inner/auto)
+        if alignment_mode and alignment_mode != "auto":
+            metrics = []
+            for cand, label, seam in scored:
+                arr = np.asarray(cand, dtype=np.float32)
+                mid = arr.size // 2
+                peak = int(np.argmax(arr))
+                dist = abs(peak - mid)
+                metrics.append((cand, label, seam, dist))
+            if alignment_mode == "outer":
+                chosen = max(metrics, key=lambda x: (x[3], -x[2]))
+            else:
+                chosen = min(metrics, key=lambda x: (x[3], x[2]))
+            best = (chosen[0], chosen[1], float(chosen[2]))
+        else:
+            best = min(scored, key=lambda x: x[2])
+
+        # Optionally write pairing debug info
+        if pairing_debug and debug_out is not None:
+            try:
+                from pathlib import Path
+                import csv
+
+                dbgdir = Path(debug_out) / "pairing_debug"
+                dbgdir.mkdir(parents=True, exist_ok=True)
+                csvf = dbgdir / "pairing_debug_video.csv"
+                write_header = not csvf.exists()
+                with csvf.open("a", newline="") as fh:
+                    w = csv.writer(fh)
+                    if write_header:
+                        w.writerow(
+                            ["seq_key", "chosen_label", "seam", "left_len", "right_len"]
+                        )
+                    seq_key = None
+                    try:
+                        seq_key = (
+                            items[0].metadata.get("seq")
+                            if isinstance(items[0].metadata, dict)
+                            else None
+                        )
+                    except Exception:
+                        seq_key = None
+                    left_len = a.size
+                    right_len = b.size
+                    w.writerow(
+                        [
+                            str(seq_key),
+                            best[1],
+                            float(best[2]),
+                            int(left_len),
+                            int(right_len),
+                        ]
+                    )
+            except Exception:
+                pass
+
+        return best[0]
+
+    processed = 0
+    # Iterate composed rows and build frames
+    for key in groups.keys():
+        arr = _compose_item(groups[key])
+
+        if W is None:
+            W = arr.size
+        elif arr.size > W:
+            old_W = W
+            W = arr.size
+            _pad_buffer_rows(W)
+        if arr.size < W:
+            arr = np.concatenate([arr, np.zeros(W - arr.size, dtype=arr.dtype)])
+        else:
+            arr = arr[:W]
+
+        # Append to rolling buffer
+        buffer.append(arr)
+        if len(buffer) > H:
+            buffer.pop(0)
+
+        processed += 1
+        # Only produce a frame every `scans_per_frame` processed sequences
+        if processed % scans_per_frame != 0:
+            continue
+
+        # Build a HxW array where rows are the recent scans
+        mat = np.zeros((H, W), dtype=np.float32)
+        rows_to_fill = len(buffer)
+        # Place newest scans at the bottom for natural scrolling (top=old, bottom=new)
+        for j, row in enumerate(buffer):
+            mat[H - rows_to_fill + j, :] = row
+        # Normalize / map to uint8 via generate_sidescan_waterfall which expects flat list
+        img8 = np.asarray(
+            generate_sidescan_waterfall(mat.flatten().tolist(), W, H), dtype=np.uint8
+        ).reshape((H, W))
+        frame = img8
+        # Apply color mapping if requested
+        if color and color.lower() != "grayscale":
+            frame_rgb = apply_palette(frame, color)
+        else:
+            frame_rgb = np.stack([frame, frame, frame], axis=-1)
         frames.append(frame_rgb)
 
-    # Use ffmpeg encoder
-    return encode_frames_to_mp4(iter(frames), output_path, fps=fps)
+    # Use ffmpeg encoder with fallback to PNG-sequence + ffmpeg if encoding fails
+    try:
+        return encode_frames_to_mp4(iter(frames), output_path, fps=fps)
+    except Exception as e:
+        # Fallback: write frames to a temporary dir and run ffmpeg on the image sequence
+        import tempfile
+        import subprocess
+
+        td = tempfile.mkdtemp(prefix="sonar_frames_")
+        for i, f in enumerate(frames):
+            Image.fromarray(f).save(os.path.join(td, f"frame_{i:05d}.png"))
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            str(fps),
+            "-i",
+            os.path.join(td, "frame_%05d.png"),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            output_path,
+        ]
+        try:
+            subprocess.check_call(cmd)
+            return output_path
+        except subprocess.CalledProcessError as ce:
+            raise RuntimeError(f"fallback ffmpeg encoding failed: {ce}") from e
 
 
 def export_full(input_path: str, out_dir: str, formats: List[str] = None, batch_size: int = 1000):
     p = SonarParser()
     formats = formats or ['waterfall']
     os.makedirs(out_dir, exist_ok=True)
-    scans = list(p.iter_scans(input_path, batch_size=batch_size))
+    # Convert parser records to canonical Scan objects using registered adapters
+    parsed = p.parse_file(input_path)
+    records = parsed.get("records", [])
+    from .canonical import to_scan
+
+    # Ensure adapters are imported so they register themselves
+    try:
+        from .adapters import rsd_adapter  # noqa: F401
+    except Exception:
+        try:
+            import sonarsniffer.adapters.rsd_adapter as rsd_adapter  # noqa: F401
+        except Exception:
+            pass
+    scans = [to_scan("rsd", r, input_path) for r in records]
 
     results = {}
     if 'waterfall' in formats:
@@ -126,20 +672,28 @@ def export_full(input_path: str, out_dir: str, formats: List[str] = None, batch_
         from typing import Tuple
 
         def _compute_bounds(scans) -> Tuple[float, float, float, float]:
-            min_lat = 90.0
-            max_lat = -90.0
-            min_lon = 180.0
-            max_lon = -180.0
+            # Group by seq and average lat/lon per sequence for more robust bounds when
+            # dual-channel records are present. Falls back to individual records if
+            # seq metadata is absent.
+            from collections import defaultdict
+
+            groups = defaultdict(list)
             for s in scans:
-                if s.lat and s.lon:
-                    min_lat = min(min_lat, s.lat)
-                    max_lat = max(max_lat, s.lat)
-                    min_lon = min(min_lon, s.lon)
-                    max_lon = max(max_lon, s.lon)
-            if min_lat > max_lat:
-                # No valid coords
+                if s.lat is None or s.lon is None:
+                    continue
+                seq = s.metadata.get("seq") if isinstance(s.metadata, dict) else None
+                key = seq if seq is not None else f"_single_{s.id}"
+                groups[key].append((s.lat, s.lon))
+            if not groups:
                 return (0.0, 0.0, 0.0, 0.0)
-            return (min_lat, max_lat, min_lon, max_lon)
+            latitudes = []
+            longitudes = []
+            for k, vals in groups.items():
+                lats = [v[0] for v in vals]
+                lons = [v[1] for v in vals]
+                latitudes.append(sum(lats) / len(lats))
+                longitudes.append(sum(lons) / len(lons))
+            return (min(latitudes), max(latitudes), min(longitudes), max(longitudes))
 
         out_png = results.get('waterfall')
         if out_png:
@@ -188,14 +742,33 @@ def export_full(input_path: str, out_dir: str, formats: List[str] = None, batch_
         tiles_dir = results.get('tiles')
         if out_png and tiles_dir:
             bounds = None
-            # Compute bounds from scans if available
+            # Compute bounds from scans grouping by seq and averaging lat/lon per sequence
             try:
-                min_lat = min((s.lat for s in scans if s.lat), default=0.0)
-                max_lat = max((s.lat for s in scans if s.lat), default=0.0)
-                min_lon = min((s.lon for s in scans if s.lon), default=0.0)
-                max_lon = max((s.lon for s in scans if s.lon), default=0.0)
-                if min_lat <= max_lat and min_lon <= max_lon:
-                    bounds = (min_lat, max_lat, min_lon, max_lon)
+                from collections import defaultdict
+
+                groups = defaultdict(list)
+                for s in scans:
+                    if s.lat is None or s.lon is None:
+                        continue
+                    seq = (
+                        s.metadata.get("seq") if isinstance(s.metadata, dict) else None
+                    )
+                    key = seq if seq is not None else f"_single_{s.id}"
+                    groups[key].append((s.lat, s.lon))
+                if groups:
+                    latitudes = []
+                    longitudes = []
+                    for vals in groups.values():
+                        lats = [v[0] for v in vals]
+                        lons = [v[1] for v in vals]
+                        latitudes.append(sum(lats) / len(lats))
+                        longitudes.append(sum(lons) / len(lons))
+                    bounds = (
+                        min(latitudes),
+                        max(latitudes),
+                        min(longitudes),
+                        max(longitudes),
+                    )
             except Exception:
                 bounds = None
 
@@ -495,4 +1068,3 @@ def generate_superoverlay_kmz(waterfall_png: str, tiles_dir: str, bounds: tuple,
     # Rename temp kmz to final
     os.replace(kmz_temp, out_kmz_path)
     return out_kmz_path
-

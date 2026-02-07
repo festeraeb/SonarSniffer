@@ -1,5 +1,5 @@
 # Minimal container for SonarSniffer web UI + API
-FROM python:3.12-slim
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
@@ -7,6 +7,7 @@ WORKDIR /app
 # System deps (runtime tools needed for full pipeline: ffmpeg, gstreamer, and GDAL)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    python3-dev \
     ca-certificates \
     git \
     ffmpeg \
@@ -24,7 +25,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt /app/requirements.txt
 
 # Install Python deps early so they are cached when only code changes
-RUN pip install --upgrade pip && pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install --upgrade pip setuptools wheel && pip install --no-cache-dir -r /app/requirements.txt \
+    && pip check \
+    && python - <<'PY'
+import sys
+try:
+    import numpy, pandas, xarray
+except Exception as e:
+    print('Import test failed:', e, file=sys.stderr)
+    sys.exit(1)
+print('Python imports OK')
+PY
 
 # Copy source and scripts only
 COPY src/ /app/src/

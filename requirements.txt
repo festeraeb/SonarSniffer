@@ -1,5 +1,5 @@
 # Core scientific computing
-numpy>=1.21.0
+numpy>=1.21.0,<1.25.0
 scipy>=1.7.0
 
 # Data handling and analysis
@@ -42,3 +42,13 @@ dask>=2021.6.0
 # Optional: For enhanced plotting
 seaborn>=0.11.0
 plotly>=5.0.0
+
+# Web UI / API
+fastapi>=0.95.0
+uvicorn[standard]>=0.22.0
+aiofiles>=23.1.0
+python-multipart>=0.0.6
+
+# Optional: Redis-backed job queue
+redis>=4.8.2
+rq>=1.1.0

@@ -1,8 +1,8 @@
-1. Get application URL:
-   - kubectl get svc -n {{ .Release.Namespace }}
-2. To upgrade the chart:
-   - helm upgrade --install sonarsniffer ./helm/sonarsniffer -n sonarsniffer --set image.tag=nightly-202602062309
-
-3. If using Azure Key Vault + Secrets Store CSI driver:
-   - The chart can create the RBAC objects to allow the CSI driver to sync secrets into Kubernetes when `keyVault.createSecretSyncRBAC=true`.
-   - Workload Identity is recommended for per-pod least-privilege access. See `docs/azure/workload-identity.md` for steps and a script for admins.
+# 1. Get application URL:
+#    - kubectl get svc -n {{ .Release.Namespace }}
+# 2. To upgrade the chart:
+#    - helm upgrade --install sonarsniffer ./helm/sonarsniffer -n sonarsniffer --set image.tag=nightly-202602062309
+#
+# 3. If using Azure Key Vault + Secrets Store CSI driver:
+#    - The chart can create the RBAC objects to allow the CSI driver to sync secrets into Kubernetes when `keyVault.createSecretSyncRBAC=true`.
+#    - Workload Identity is recommended for per-pod least-privilege access. See `docs/azure/workload-identity.md` for steps and a script for admins.

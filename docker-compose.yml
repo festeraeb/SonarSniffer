@@ -3,11 +3,34 @@ services:
   sonarsniffer:
     build: .
     ports:
-      - "8081:8081"
+      - "${SONARS_PORT:-8081}:8081"
     volumes:
       - ./outputs:/app/outputs
+      - .:/app:ro
     environment:
       - SONARS_OUTPUT_DIR=/app/outputs
       - SONARS_HOST=0.0.0.0
-      - SONARS_PORT=8081
+      - SONARS_PORT=${SONARS_PORT:-8081}
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:6-alpine
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: sh -c "./scripts/worker_entrypoint.sh"
+    volumes:
+      - ./outputs:/app/outputs
+      - .:/app:ro
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SONARS_OUTPUT_DIR=/app/outputs
+      - HOLLOWAY_SAMPLE_STRIDE=50
+      - HOLLOWAY_MAX_ROWS=100
+    depends_on:
+      - redis
     restart: unless-stopped

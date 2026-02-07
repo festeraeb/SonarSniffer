@@ -8,7 +8,7 @@ Usage:
     sonarsniffer license [--generate] [--validate=<key>]
     sonarsniffer optimize <file> [--output=<dir>] [--method=<method>]
     sonarsniffer ml-predict <file> [--model=<path>]
-    sonarsniffer export-tiles <file> [--output=<dir>] [--zoom=<z>]
+    sonarsniffer export-tiles <file> [--output=<dir>] [--zoom=<z>] [--batch-size=<n>]
     sonarsniffer (-h | --help)
     sonarsniffer --version
 
@@ -24,6 +24,7 @@ Options:
     --method=<method>   Optimization method (incremental,streaming) [default: incremental]
     --model=<path>      Path to trained ML model
     --zoom=<z>          Tile zoom level [default: 10]
+    --batch-size=<n>    Process input files in batches of N records (memory-friendly)
 """
 
 import sys
@@ -89,12 +90,64 @@ def analyze_command(args):
     print(f"Analyzing sonar file: {file_path}")
 
     try:
-        # Parse the sonar file
         parser = SonarParser()
-        data = parser.parse_file(file_path)
 
-        # Create output directory
+        batch_size = int(args.get("--batch-size") or 0)
         os.makedirs(output_dir, exist_ok=True)
+
+        if batch_size and batch_size > 0:
+            # Stream and accumulate metadata, but keep only a small sample of records for display
+            total_records = 0
+            sample_records = []
+            min_lat = 91.0
+            max_lat = -91.0
+            min_lon = 181.0
+            max_lon = -181.0
+            depths = []
+
+            for batch in parser.parse_file_in_chunks(file_path, batch_size=batch_size):
+                total_records += len(batch)
+                # Update sample records (keep up to 10)
+                for r in batch:
+                    if len(sample_records) < 10:
+                        sample_records.append(r)
+                    lat = r.get("lat", 0.0)
+                    lon = r.get("lon", 0.0)
+                    d = r.get("depth_m", 0.0)
+                    if lat != 0.0:
+                        min_lat = min(min_lat, lat)
+                        max_lat = max(max_lat, lat)
+                    if lon != 0.0:
+                        min_lon = min(min_lon, lon)
+                        max_lon = max(max_lon, lon)
+                    if d and d > 0:
+                        depths.append(d)
+
+            metadata = {
+                "filename": os.path.basename(file_path),
+                "format": os.path.splitext(file_path)[1].lstrip('.').upper(),
+                "total_records_in_file": total_records,
+                "file_size": os.path.getsize(file_path),
+            }
+            if total_records > 0 and min_lat <= max_lat and min_lon <= max_lon:
+                metadata.update({
+                    "bounds": {"north": max_lat, "south": min_lat, "east": max_lon, "west": min_lon},
+                    "center_lat": (min_lat + max_lat) / 2.0,
+                    "center_lon": (min_lon + max_lon) / 2.0,
+                    "record_count": total_records,
+                })
+            if depths:
+                metadata.update({
+                    "depth_range": f"{min(depths):.1f}m - {max(depths):.1f}m",
+                    "min_depth": min(depths),
+                    "max_depth": max(depths),
+                })
+
+            data = {"metadata": metadata, "records": sample_records}
+
+        else:
+            # Non-streaming parse
+            data = parser.parse_file(file_path)
 
         # Generate simple output based on format
         if output_format == "html":
@@ -419,13 +472,24 @@ def ml_predict_command(args):
 
         # Parse data and make predictions
         parser = SonarParser()
-        data = parser.parse_file(file_path)
-        records = data.get("records", [])
+        batch_size = int(args.get("--batch-size") or 0)
+        processed = 0
+        predictions = []
 
-        predictions = model.predict_batch(records)
+        if batch_size and batch_size > 0:
+            for batch in parser.parse_file_in_chunks(file_path, batch_size=batch_size):
+                preds = model.predict_batch(batch)
+                predictions.extend(preds)
+                processed += len(batch)
+                print(f"  Processed {processed} records...")
+        else:
+            data = parser.parse_file(file_path)
+            records = data.get("records", [])
+            predictions = model.predict_batch(records)
+            processed = len(records)
 
         print(f"ML Predictions complete:")
-        print(f"  Records processed: {len(records)}")
+        print(f"  Records processed: {processed}")
         print(f"  Predictions made: {len(predictions)}")
         print(f"  Average confidence: {model.get_average_confidence():.2%}")
         return 0
@@ -453,10 +517,61 @@ def export_tiles_command(args):
     print(f"Zoom level: {zoom}")
 
     try:
-        # First parse the file
+        # Handle batch-mode heatmap accumulation to avoid loading all records in memory
         parser = SonarParser()
-        data = parser.parse_file(file_path)
+        batch_size = int(args.get("--batch-size") or 0)
         os.makedirs(output_dir, exist_ok=True)
+
+        data = None
+        if batch_size and batch_size > 0:
+            # Coarse grid accumulation (100x100)
+            grid_size = 100
+            counts = None
+            min_lat = 91.0
+            max_lat = -91.0
+            min_lon = 181.0
+            max_lon = -181.0
+            total = 0
+
+            for batch in parser.parse_file_in_chunks(file_path, batch_size=batch_size):
+                lats = [r.get('lat', 0.0) for r in batch if r.get('lat', 0.0) != 0.0]
+                lons = [r.get('lon', 0.0) for r in batch if r.get('lon', 0.0) != 0.0]
+                if not lats or not lons:
+                    continue
+                min_lat = min(min_lat, min(lats))
+                max_lat = max(max_lat, max(lats))
+                min_lon = min(min_lon, min(lons))
+                max_lon = max(max_lon, max(lons))
+
+                if counts is None:
+                    counts = [[0 for _ in range(grid_size)] for _ in range(grid_size)]
+
+                total += len(batch)
+                for r in batch:
+                    lat = r.get('lat', 0.0)
+                    lon = r.get('lon', 0.0)
+                    if lat == 0.0 or lon == 0.0:
+                        continue
+                    # Map to grid
+                    i = int((lat - min_lat) / (max_lat - min_lat + 1e-9) * (grid_size - 1))
+                    j = int((lon - min_lon) / (max_lon - min_lon + 1e-9) * (grid_size - 1))
+                    i = max(0, min(grid_size - 1, i))
+                    j = max(0, min(grid_size - 1, j))
+                    counts[i][j] += 1
+
+            if counts is None:
+                print("No valid geolocation data found for tile export")
+                return 1
+
+            import numpy as np
+
+            heatmap = np.array(counts, dtype=np.float32)
+            bounds = (min_lon, min_lat, max_lon, max_lat)
+            data = {"heatmap": heatmap, "bounds": bounds}
+
+        else:
+            # First parse the file (non-batch)
+            data = parser.parse_file(file_path)
 
         # Try GeoTIFF export
         try:

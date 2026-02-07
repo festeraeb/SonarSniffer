@@ -14,9 +14,57 @@
 </head>
 <body>
   <h1>SonarSniffer Outputs (Prototype)</h1>
-  <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center">
-    <button id="startRun">Start Holloway Run</button>
+  <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;align-items:center">
+    <label for="colorSelect">Color:</label>
+    <select id="colorSelect">
+      <option value="amber" selected>Amber</option>
+      <option value="grayscale">Grayscale</option>
+      <option value="blue">Blue</option>
+      <option value="green">Green</option>
+      <option value="yellow">Yellow</option>
+      <option value="pink">Pink</option>
+      <option value="red">Red/Orange</option>
+      <option value="classic">Classic Multi</option>
+      <option value="night">Night / Inverted</option>
+    </select>
+    <label style="margin-left:12px"><input id="genVideo" type="checkbox" checked> Generate MP4</label>
+  
+    <label style="margin-left:12px">Video height: <input id="videoHeight" type="number" min="64" max="2000" step="1"
+        style="width:100px"></label>
+    <label>FPS: <input id="videoFps" type="number" min="1" max="60" step="1" value="5" style="width:80px"></label>
+    <label>Scans/frame: <input id="scansPerFrame" type="number" min="1" max="10" step="1" value="1"
+        style="width:80px"></label>
+    <label>Channel gap: <input id="channelGap" type="number" min="0" max="1024" step="1" value="16"
+        style="width:100px"></label>
+    <label style="margin-left:12px"><input id="pairingDebug" type="checkbox"> Pairing debug</label>
+    <label>Alignment: <select id="alignmentMode">
+        <option value="auto" selected>auto</option>
+        <option value="outer">outer</option>
+        <option value="inner">inner</option>
+      </select></label>
+  
+    <!-- New: file picker (choose input source) + inline upload -->
+    <label style="margin-left:12px">Source: <select id="sourceSelect">
+        <option value="">(none)</option>
+      </select>
+      <input id="uploadFile" type="file" style="margin-left:8px"></label>
+    <button id="uploadBtn">Upload</button>
+    <!-- API token input (hidden unless required) -->
+    <label id="tokenLabel" style="margin-left:12px;display:none">API Token: <input id="apiToken" type="password"
+        style="width:220px"></label>
+    <button id="setToken" style="display:none">Set Token</button>
+  
+    <!-- New: run selector to focus outputs for a specific run -->
+    <label style="margin-left:12px">Run: <select id="runSelect">
+        <option value="">All</option>
+      </select></label>
+  
+    <button id="startRun">Run</button>
     <span id="runStatus"></span>
+<!-- File generation checkboxes (on/off) -->
+<label style="margin-left:12px"><input id="genMP4" type="checkbox" checked> MP4</label>
+<label style="margin-left:6px"><input id="genMBTiles" type="checkbox" checked> MBTiles</label>
+<label style="margin-left:6px"><input id="genKMZ" type="checkbox" checked> KMZ</label>
   </div>
   <div id="content">Loading...</div>
   <h3>Live Logs</h3>
@@ -25,9 +73,81 @@
   <script>
     let currentJob = null;
     let ws = null;
+      // API token (persisted in localStorage if set)
+      let apiToken = localStorage.getItem('sonars_api_token') || '';
+
+      // Helper to include X-Token header when present
+      async function fetchWithToken(url, opts) {
+        opts = opts || {};
+        opts.headers = opts.headers || {};
+        if (apiToken) opts.headers['X-Token'] = apiToken;
+        return fetch(url, opts);
+      }
+
+      // Check whether server requires a token; if so show token input
+      (async () => {
+        try {
+          const r = await fetch('/api/token_required');
+          if (r.ok) {
+            const info = await r.json();
+            if (info.required) {
+              document.getElementById('tokenLabel').style.display = 'inline';
+              document.getElementById('setToken').style.display = 'inline';
+              document.getElementById('apiToken').value = apiToken;
+            }
+          }
+        } catch (e) { console.warn('token check failed', e); }
+      })();
+
+      // wire set token button
+      document.getElementById('setToken').addEventListener('click', () => {
+        const v = document.getElementById('apiToken').value || '';
+        apiToken = v;
+        if (apiToken) localStorage.setItem('sonars_api_token', apiToken); else localStorage.removeItem('sonars_api_token');
+        alert(apiToken ? 'Token saved (sent as X-Token header)' : 'Token cleared');
+      });
+
+      // Set default video height to 80% of window height
+      document.getElementById('videoHeight').value = Math.round(window.innerHeight * 0.8);
+
     document.getElementById('startRun').addEventListener('click', async ()=>{
-      const r = await fetch('/api/run/holloway', {method:'POST'});
-      if (!r.ok) { alert('Failed to start run'); return; }
+      const color = document.getElementById('colorSelect').value;
+      const video = document.getElementById('genVideo').checked ? 'true' : 'false';
+      const videoHeight = document.getElementById('videoHeight').value;
+      const videoFps = document.getElementById('videoFps').value;
+      const scansPerFrame = document.getElementById('scansPerFrame').value;
+      const channelGap = document.getElementById('channelGap').value;
+      const pairingDebug = document.getElementById('pairingDebug').checked ? 'true' : 'false';
+      const alignmentMode = document.getElementById('alignmentMode').value;
+      const source = document.getElementById('sourceSelect').value;
+
+      // file generation checkbox inputs (send '1' or '0')
+      const genMP4 = document.getElementById('genMP4').checked ? '1' : '0';
+      const genKMZ = document.getElementById('genKMZ').checked ? '1' : '0';
+      const genMBTiles = document.getElementById('genMBTiles').checked ? '1' : '0';
+
+      const params = new URLSearchParams();
+      params.set('color', color);
+      params.set('video', video);
+      if (video === 'true') {
+        params.set('video_height', videoHeight);
+        params.set('video_fps', videoFps);
+        params.set('scans_per_frame', scansPerFrame);
+      }
+      if (channelGap && Number(channelGap) > 0) params.set('channel_gap', channelGap);
+      if (pairingDebug === 'true') params.set('pairing_debug', pairingDebug);
+      if (alignmentMode) params.set('alignment_mode', alignmentMode);
+      if (source) params.set('source', source);
+      // attach generation flags (as 1/0)
+      params.set('gen_mp4', genMP4);
+      params.set('gen_kmz', genKMZ);
+      params.set('gen_mbtiles', genMBTiles);
+
+      const r = await fetchWithToken(`/api/run/holloway?${params.toString()}`, { method: 'POST' });
+      if (!r.ok) {
+        if (r.status === 401) { alert('Unauthorized: set API token (if required)'); } else { alert('Failed to start run'); }
+        return;
+      }
       const j = await r.json();
       currentJob = j.job_id;
       document.getElementById('runStatus').innerText = `Job: ${currentJob}`;
@@ -37,16 +157,26 @@
 
     async function pollJob(jobId){
       try{
-        const r = await fetch(`/api/run/${jobId}`);
+        const r = await fetchWithToken(`/api/run/${jobId}`);
         if (!r.ok) return;
         const info = await r.json();
-        if (info.status && info.status !== 'running' && info.status !== 'queued'){
+        // If job reports an out_dir_rel, set the run selector to focus it
+        try {
+          if (info.out_dir_rel) {
+            const rs = document.getElementById('runSelect');
+            const val = info.out_dir_rel;
+            if ([...rs.options].find(o => o.value === val)) {
+              rs.value = val;
+            } else {
+              const opt = document.createElement('option'); opt.value = val; opt.text = val; rs.appendChild(opt); rs.value = val;
+            }
+            load(val);
+          }
+        } catch (e) { }
+        if (info.status && info.status !== 'running' && info.status !== 'queued') {
           document.getElementById('runStatus').innerText += ` — ${info.status}`;
-        } else {
-          setTimeout(()=>pollJob(jobId), 2000);
-        }
-      }catch(e){ setTimeout(()=>pollJob(jobId), 2000);}
-    }
+          // Refresh outputs listing when run completes
+          load(document.getElementById('runSelect').value || null);
 
     function connectWS(jobId){
       if (ws){ try{ ws.close() }catch(e){} }
@@ -58,12 +188,26 @@
       ws.onclose = ()=>{ logs.textContent += '[WS closed]\n'; }
     }
 
-    async function load() {
+          async function load(runFilter = null) {
       const r = await fetch('/api/outputs');
       if (!r.ok) { document.getElementById('content').innerText = 'Failed to load outputs'; return; }
       const items = await r.json();
+      // Populate run selector (unique top-level dirs)
+      const runs = new Set();
+      items.forEach(i => {
+        const seg = i.path.split('/')[0];
+        if (seg) runs.add(seg);
+      });
+      const rs = document.getElementById('runSelect');
+      // clear except the All option
+      rs.innerHTML = '<option value="">All</option>';
+      Array.from(runs).sort().forEach(rn => {
+        const opt = document.createElement('option'); opt.value = rn; opt.text = rn; rs.appendChild(opt);
+      });
+
       const out = document.createElement('div'); out.className='list';
       items.forEach(i => {
+        if (runFilter && !i.path.startsWith(runFilter + '/')) return;
         const node = document.createElement('div'); node.className='card';
         const p = document.createElement('p'); p.innerText = i.path; node.appendChild(p);
         if (i.path.match(/\.png$|\.jpg$|\.gif$/i)){
@@ -77,6 +221,57 @@
       });
       const c = document.getElementById('content'); c.innerHTML=''; c.appendChild(out);
     }
+
+          document.getElementById('runSelect').addEventListener('change', () => {
+            load(document.getElementById('runSelect').value || null);
+          });
+
+          // populate inputs file picker
+          async function loadInputs() {
+            try {
+              const r = await fetch('/api/inputs');
+              if (!r.ok) return;
+              const items = await r.json();
+              const sel = document.getElementById('sourceSelect');
+              // clear existing options except the initial (none)
+              // leave the first (none) option intact
+              while (sel.options.length > 1) sel.remove(1);
+              if (!items || items.length === 0) {
+                // show hint option
+                const opt = document.createElement('option'); opt.value = ''; opt.text = '(no inputs found - you can upload one)'; sel.appendChild(opt);
+              } else {
+                items.forEach(i => {
+                  const opt = document.createElement('option'); opt.value = i.path; opt.text = i.path; sel.appendChild(opt);
+                });
+              }
+            } catch (e) { console.warn(e); }
+          }
+
+          // Upload fallback: send a file to /api/upload and select it when done
+          document.getElementById('uploadBtn').addEventListener('click', async () => {
+            const f = document.getElementById('uploadFile').files[0];
+            if (!f) { alert('Choose a file to upload'); return; }
+            const fd = new FormData(); fd.append('upload_file', f);
+            try {
+              const r = await fetchWithToken('/api/upload', { method: 'POST', body: fd });
+              if (!r.ok) {
+                if (r.status === 401) { alert('Upload unauthorized: set API token and try again'); } else { alert('Upload failed'); }
+                return;
+              }
+              const info = await r.json();
+              // Refresh inputs and select the uploaded file
+              await loadInputs();
+              const sel = document.getElementById('sourceSelect');
+              // find the new option and set it
+              const val = info.path || info.filename || f.name;
+              for (let i = 0; i < sel.options.length; i++) {
+                if (sel.options[i].value === val) { sel.value = val; break; }
+              }
+              alert('Upload complete: ' + val);
+            } catch (e) { alert('Upload error'); console.warn(e); }
+          });
+
+          loadInputs();
     load();
   </script>
 </body>

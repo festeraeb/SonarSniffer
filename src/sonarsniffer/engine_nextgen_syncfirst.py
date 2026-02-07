@@ -7,10 +7,12 @@ from typing import Optional, Iterable, Callable, Tuple, Dict, Any
 from .core_shared import (
     MAGIC_REC_HDR,
     MAGIC_REC_TRL,
+    MAGIC_REC_HDR_CANDIDATES,
     _parse_varstruct,
     _mapunit_to_deg,
     _read_varint_from,
     find_magic,
+    find_first_magic,
     set_progress_hook,
     _emit,
 )
@@ -49,15 +51,23 @@ def parse_rsd_records_nextgen(
     with open(path, "rb") as f:
         mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         limit = size
-        mbytes = MAGIC_REC_HDR.to_bytes(4, "little")
+        # Build candidate magic byte sequences from registered header values
+        mbytes_candidates = [x.to_bytes(4, "little") for x in MAGIC_REC_HDR_CANDIDATES]
 
         _emit(0.0, "Scanning file for sonar data...")
-        j = find_magic(mm, mbytes, 0, limit)
+        j, used_magic = find_first_magic(mm, mbytes_candidates, 0, limit)
         if j < 0:
             _emit(0.0, "No sonar data found in file")
             mm.close()
             return
         pos = j - 1
+        if used_magic is not None and used_magic != mbytes_candidates[0]:
+            import logging
+
+            logging.warning(
+                "Alternate header magic detected: 0x%08X — parser will use this pattern",
+                int.from_bytes(used_magic, "little"),
+            )
         _emit(5.0, f"Found sonar data, analyzing structure...")
 
         count = 0
@@ -66,10 +76,20 @@ def parse_rsd_records_nextgen(
         MAX_STUCK = 2
 
         while pos + 12 < limit:
-            k = find_magic(mm, mbytes, max(pos, 0), min(limit, pos + 16 * 1024 * 1024))
-            if k < 0:
+            # Search for the earliest occurrence of any registered candidate magic
+            best_idx = -1
+            search_start = max(pos, 0)
+            search_end = min(limit, pos + 16 * 1024 * 1024)
+            for cb in mbytes_candidates:
+                try:
+                    idx = mm.find(cb, search_start, search_end)
+                except Exception:
+                    idx = -1
+                if idx != -1 and (best_idx == -1 or idx < best_idx):
+                    best_idx = idx
+            if best_idx < 0:
                 break
-            pos_magic = k
+            pos_magic = best_idx
             # Don't emit technical header messages, just update progress
 
             if pos_magic == last_magic:
@@ -200,9 +220,10 @@ def parse_rsd_records_nextgen(
             if hop:
                 pos = hdr_start + hop
             else:
-                nxt = find_magic(
+                # Search for the next record using any registered header magic
+                nxt, _ = find_first_magic(
                     mm,
-                    mbytes,
+                    mbytes_candidates,
                     min(limit, trailer_pos + 2),
                     min(limit, hdr_start + 4 * 1024 * 1024),
                 )
@@ -220,6 +241,13 @@ def parse_rsd(
     """Parse RSD file and write records to CSV.
     Returns (record_count, csv_path, log_path).
     """
+    import time
+    try:
+        from . import telemetry as _telemetry
+    except Exception:
+        _telemetry = None
+
+    start = time.time()
     # Setup output paths
     os.makedirs(out_dir, exist_ok=True)
     base_name = os.path.splitext(os.path.basename(rsd_path))[0]
@@ -287,6 +315,36 @@ def parse_rsd(
             # Write error to log
             with open(log_path, "w") as log_file:
                 log_file.write(f"Parse error: {str(e)}\n")
+            # Send telemetry about the failure but do not mask original exception
+            try:
+                if _telemetry:
+                    _telemetry.send_parse_report(
+                        file_name=rsd_path,
+                        parser_used="python-nextgen",
+                        success=False,
+                        errors=1,
+                        warnings=0,
+                        samples_parsed=record_count,
+                        duration_ms=int((time.time() - start) * 1000),
+                    )
+            except Exception:
+                pass
             raise
+
+    duration_ms = int((time.time() - start) * 1000)
+    # Send success telemetry if telemetry is available
+    try:
+        if _telemetry:
+            _telemetry.send_parse_report(
+                file_name=rsd_path,
+                parser_used="python-nextgen",
+                success=True,
+                errors=0,
+                warnings=0,
+                samples_parsed=record_count,
+                duration_ms=duration_ms,
+            )
+    except Exception:
+        pass
 
     return record_count, csv_path, log_path

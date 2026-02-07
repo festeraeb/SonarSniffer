@@ -108,6 +108,22 @@ CESARops/
 └── logs/                  # Application logs
 ```
 
+## 🧪 Samples & local test data
+
+- Place representative, small sonar files in the top-level `samples/` directory for deterministic tests and quick local development (XTF, RSD, SON, DAT).
+- A helper is available at `scripts/add_local_samples.py` to copy candidate files from `data/` into `samples/`:
+
+```bash
+# List small candidate files under data/
+python scripts/add_local_samples.py
+
+# Copy explicit files into samples/
+python scripts/add_local_samples.py data/synthetic_test.xtf data/synthetic_test.dat
+```
+
+Notes: Keep `samples/` small (prefer files <~100MB) to avoid bloating the repository and CI runs. For large datasets, point tests and tools at `data/` instead.
+
+
 ## 🔬 **Machine Learning Features**
 
 ### **Drift Correction Model**
