@@ -1,0 +1,38 @@
+replicaCount: 1
+image:
+  repository: shipwreckacr.azurecr.io/sonarsniffer
+  tag: "nightly-202602062309"
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 80
+ingress:
+  enabled: true
+  host: sonarsniffer.example.com
+  tls:
+    enabled: true
+    secretName: sonarsniffer-tls
+certManager:
+  issuer: letsencrypt-staging
+  createClusterIssuer: false
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+keda:
+  enabled: true
+  redis:
+    address: ""
+    listName: "sonarsniffer-queue"
+keyVault:
+  enabled: false
+  keyVaultName: ""
+  tenantId: ""
+  secretProviderClassName: "sonarsniffer-kv-spc"
+resources: {}
+nodeSelector: {}
+tolerations: []
+serviceAccount:
+  create: true
+  name: ""

@@ -1,0 +1,17 @@
+{{- if .Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "sonarsniffer.fullname" . }}
+spec:
+  scaleTargetRef:
+    name: {{ include "sonarsniffer.fullname" . }}
+  minReplicaCount: {{ .Values.hpa.minReplicas }}
+  maxReplicaCount: {{ .Values.hpa.maxReplicas }}
+  triggers:
+    - type: redis
+      metadata:
+        address: "{{ .Values.keda.redis.address }}"
+        listName: "{{ .Values.keda.redis.listName }}"
+        listLength: '5'
+{{- end }}

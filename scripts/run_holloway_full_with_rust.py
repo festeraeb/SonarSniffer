@@ -40,10 +40,29 @@ try:
     from sonarsniffer.rsd_video_core import generate_sidescan_waterfall
 except Exception:
     from rsd_video_core import generate_sidescan_waterfall
-try:
-    from sonarsniffer.python_cuda_bridge import encode_frames_to_mp4
-except Exception:
-    from python_cuda_bridge import encode_frames_to_mp4
+# Choose encoder bridge according to environment (prefer gstreamer if configured)
+VIDEO_ENCODER = os.environ.get("VIDEO_ENCODER", "").lower()
+encode_frames_fn = None
+if VIDEO_ENCODER == "gstreamer":
+    try:
+        from sonarsniffer.gstreamer_bridge import (
+            encode_frames_with_fallback as encode_frames_fn,
+        )
+    except Exception:
+        try:
+            from gstreamer_bridge import encode_frames_with_fallback as encode_frames_fn
+        except Exception:
+            encode_frames_fn = None
+if encode_frames_fn is None:
+    try:
+        from sonarsniffer.python_cuda_bridge import (
+            encode_frames_to_mp4 as encode_frames_fn,
+        )
+    except Exception:
+        try:
+            from python_cuda_bridge import encode_frames_to_mp4 as encode_frames_fn
+        except Exception:
+            encode_frames_fn = None
 
 print('Using Rust parser path (shim if no compiled module)')
 parser = SonarParser()
@@ -120,7 +139,27 @@ print('Encoding video to', video_out, f'(W={VIDEO_WIDTH} H={VIDEO_HEIGHT} fps={V
       f"display_H={DISPLAY_H if DISPLAY_H else VIDEO_HEIGHT}")
 frames = frame_generator(scans, VIDEO_WIDTH, VIDEO_HEIGHT)
 try:
-    encode_frames_to_mp4(frames, video_out, fps=VIDEO_FPS, output_height=(DISPLAY_H if DISPLAY_H else None))
+    if encode_frames_fn is None:
+        raise RuntimeError("No encoder function available (gstreamer or ffmpeg)")
+    # If gstreamer bridge is used, its function signature may be encode_frames_with_fallback
+    # which returns output_path. Call it accordingly.
+    encode_result = None
+    try:
+        encode_result = encode_frames_fn(
+            frames,
+            video_out,
+            fps=VIDEO_FPS,
+            width=VIDEO_WIDTH,
+            height=(DISPLAY_H if DISPLAY_H else VIDEO_HEIGHT),
+        )
+    except TypeError:
+        # Fallback: some bridges use output_height kw; try with output_height
+        encode_result = encode_frames_fn(
+            frames,
+            video_out,
+            fps=VIDEO_FPS,
+            output_height=(DISPLAY_H if DISPLAY_H else None),
+        )
     print('Video written:', video_out)
 except Exception as e:
     import traceback

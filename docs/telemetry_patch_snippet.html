@@ -1,0 +1,16 @@
+<!-- SonarSniffer / CESAROPS: Telemetry & Patching Summary (snippet) -->
+<section id="telemetry-patching">
+  <h2>Telemetry & Patching</h2>
+  <p>
+    SonarSniffer now supports optional telemetry reporting and a controlled,
+    auditable two-way patch workflow for safe configuration updates (e.g.,
+    Garmin magic header variants). Patches are signed and can be auto-applied
+    after approval. Code patches always require manual review.
+  </p>
+  <ul>
+    <li><a href="/docs/telemetry_and_patching.md">Full implementation details & guide</a></li>
+    <li>Scripts: <code>scripts/scan_garmin_firmware.py</code>, <code>scripts/submit_patch.py</code>, <code>scripts/poll_and_apply_patches.py</code></li>
+    <li>Security: HMAC-SHA256 signed patches via <code>SONARSNIFFER_PATCH_SECRET</code></li>
+  </ul>
+  <p class="note"><strong>Note:</strong> Only safe config-like patches (currently <code>magic_variants</code>) are auto-applied; code changes must go through PR review.</p>
+</section>

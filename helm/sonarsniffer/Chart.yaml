@@ -1,0 +1,6 @@
+apiVersion: v2
+name: sonarsniffer
+description: Helm chart for SonarSniffer pipeline
+type: application
+version: 0.1.0
+appVersion: "nightly"

@@ -1,0 +1,45 @@
+name: CI & Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Log in to ACR
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.ACR_LOGIN_SERVER }}/sonarsniffer:${{ github.sha }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          resource-group: shipwreck-rg
+          cluster-name: sonarsniffer-aks
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+
+      - name: Deploy via Helm
+        run: |
+          helm upgrade --install sonarsniffer ./helm/sonarsniffer -n sonarsniffer --create-namespace --set image.tag=${{ github.sha }}

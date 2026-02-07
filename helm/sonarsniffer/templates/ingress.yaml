@@ -1,0 +1,29 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "sonarsniffer.fullname" . }}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$1
+{{- if .Values.certManager }}
+    cert-manager.io/cluster-issuer: "{{ .Values.certManager.issuer }}"
+{{- end }}
+spec:
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "sonarsniffer.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+{{- end }}
+{{- end }}

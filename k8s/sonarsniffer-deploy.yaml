@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sonarsniffer
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sonarsniffer-secrets
+  namespace: sonarsniffer
+stringData:
+  SENTRY_DSN: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sonarsniffer
+  namespace: sonarsniffer
+  labels:
+    app: sonarsniffer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sonarsniffer
+  template:
+    metadata:
+      labels:
+        app: sonarsniffer
+    spec:
+      containers:
+        - name: sonarsniffer
+          image: shipwreckacr.azurecr.io/sonarsniffer:nightly-202602062309
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: sonarsniffer-secrets
+                  key: SENTRY_DSN
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sonarsniffer
+  namespace: sonarsniffer
+spec:
+  type: ClusterIP
+  selector:
+    app: sonarsniffer
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080

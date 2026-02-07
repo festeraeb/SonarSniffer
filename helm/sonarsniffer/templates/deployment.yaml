@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sonarsniffer.fullname" . }}
+  labels:
+    app: {{ include "sonarsniffer.name" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "sonarsniffer.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "sonarsniffer.name" . }}
+    spec:
+      serviceAccountName: {{ include "sonarsniffer.serviceAccountName" . }}
+      containers:
+        - name: sonarsniffer
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: sonarsniffer-secrets
+                  key: SENTRY_DSN
+          resources: {{ toYaml .Values.resources | nindent 10 }}

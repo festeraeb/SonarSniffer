@@ -1,0 +1,32 @@
+name: Container smoke test
+
+on:
+    workflow_dispatch: {}
+
+jobs:
+    smoke:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Install jq
+              run: sudo apt-get update && sudo apt-get install -y jq
+
+            - name: Start compose stack and run smoke test
+              run: |
+                  chmod +x ./scripts/ci_smoke_test.sh
+                  ./scripts/ci_smoke_test.sh
+              env:
+                  SONARS_API_TOKEN: ${{ secrets.SONARS_API_TOKEN }}
+
+            - name: Upload outputs as artifact
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: sonarsniffer-outputs
+                  path: outputs/**
+                  retention-days: 7

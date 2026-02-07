@@ -1,0 +1,37 @@
+name: Rust Wheels & Benchmarks
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build-bench:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: [3.11, 3.12]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install maturin
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin==1.2.3
+      - name: Build wheel (maturin)
+        run: |
+          maturin develop --release
+      - name: Run tests
+        run: |
+          python -m pytest -q
+      - name: Run benchmark (example file must be provided via artifact)
+        run: |
+          python scripts/benchmark_parser.py samples/B001.SON --repeat 1 --out benchmark-${{ matrix.python }}.json
+      - name: Upload benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.python }}
+          path: benchmark-*.json
