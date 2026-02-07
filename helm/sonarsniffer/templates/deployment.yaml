@@ -20,11 +20,25 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - containerPort: 8080
+            - containerPort: 8081
           env:
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
                   name: sonarsniffer-secrets
                   key: SENTRY_DSN
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
           resources: {{ toYaml .Values.resources | nindent 10 }}

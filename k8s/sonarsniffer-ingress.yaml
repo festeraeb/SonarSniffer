@@ -5,7 +5,7 @@ metadata:
   namespace: sonarsniffer
   annotations:
     kubernetes.io/ingress.class: "nginx"
-    cert-manager.io/cluster-issuer: "selfsigned-issuer"
+    cert-manager.io/cluster-issuer: "letsencrypt-staging"
 spec:
   rules:
     - host: sonarsniffer.20.80.36.143.nip.io

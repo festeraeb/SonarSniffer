@@ -8,12 +8,12 @@ service:
   port: 80
 ingress:
   enabled: true
-  host: sonarsniffer.example.com
+  host: sonarsniffer.20.80.36.143.nip.io
   tls:
     enabled: true
     secretName: sonarsniffer-tls
 certManager:
-  issuer: letsencrypt-staging
+  issuer: selfsigned-issuer
   createClusterIssuer: false
 hpa:
   enabled: true
@@ -26,9 +26,9 @@ keda:
     address: ""
     listName: "sonarsniffer-queue"
 keyVault:
-  enabled: false
-  keyVaultName: ""
-  tenantId: ""
+  enabled: true
+  keyVaultName: "shipwreck-kv-20260207"
+  tenantId: "248d303d-da77-4073-8a7b-d6640600a793"
   secretProviderClassName: "sonarsniffer-kv-spc"
 resources: {}
 nodeSelector: {}
