@@ -1,0 +1,242 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, develop]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  build-windows:
+    name: Build Windows (.msi Installer)
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        rust: [stable]
+        node: [18.x]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          targets: x86_64-pc-windows-msvc
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm install
+          cd src-tauri
+          cargo fetch
+
+      - name: Build frontend
+        run: npm run build:ui
+
+      - name: Build Tauri Windows app
+        run: npm run build:windows
+
+      - name: Create MSI installer
+        run: npm run build:msi
+        continue-on-error: true
+
+      - name: Upload artifacts (Windows EXE)
+        uses: actions/upload-artifact@v3
+        with:
+          name: sonarsniffer-windows-exe
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/SonarSniffer.exe
+          if-no-files-found: warn
+
+      - name: Upload artifacts (Windows MSI)
+        uses: actions/upload-artifact@v3
+        with:
+          name: sonarsniffer-windows-msi
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/msi/*.msi
+          if-no-files-found: warn
+
+  build-macos:
+    name: Build macOS (.dmg Bundle)
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        rust: [stable]
+        node: [18.x]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm install
+          cd src-tauri
+          cargo fetch
+
+      - name: Build frontend
+        run: npm run build:ui
+
+      - name: Build macOS app (Intel)
+        run: |
+          cargo build --release --target x86_64-apple-darwin
+          jq '.build.target = "x86_64-apple-darwin"' src-tauri/tauri.conf.json > temp && mv temp src-tauri/tauri.conf.json
+          npm run tauri -- build --target x86_64-apple-darwin
+
+      - name: Build macOS app (Apple Silicon)
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          jq '.build.target = "aarch64-apple-darwin"' src-tauri/tauri.conf.json > temp && mv temp src-tauri/tauri.conf.json
+          npm run tauri -- build --target aarch64-apple-darwin
+
+      - name: Upload artifacts (macOS DMG)
+        uses: actions/upload-artifact@v3
+        with:
+          name: sonarsniffer-macos-dmg
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: warn
+
+  build-linux:
+    name: Build Linux (AppImage)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable]
+        node: [18.x]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libudev-dev \
+            pkg-config \
+            build-essential \
+            curl \
+            wget \
+            libssl-dev
+
+      - name: Install dependencies
+        run: |
+          npm install
+          cd src-tauri
+          cargo fetch
+
+      - name: Build frontend
+        run: npm run build:ui
+
+      - name: Build Linux app
+        run: npm run tauri -- build --target x86_64-unknown-linux-gnu
+
+      - name: Upload artifacts (Linux AppImage)
+        uses: actions/upload-artifact@v3
+        with:
+          name: sonarsniffer-linux-appimage
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: warn
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.x
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Run linter
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Build Rust backend (test)
+        run: |
+          cd src-tauri
+          cargo fetch
+          cargo build --release
+
+  release:
+    name: Create Release
+    needs: [build-windows, build-macos, build-linux, test]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            sonarsniffer-windows-exe/**
+            sonarsniffer-windows-msi/**
+            sonarsniffer-macos-dmg/**
+            sonarsniffer-linux-appimage/**
+          draft: false
+          prerelease: true
+          body: |
+            # SonarSniffer Beta Release
+
+            This is a beta release of SonarSniffer with the following artifacts:
+
+            - **Windows**: `.msi` installer and standalone `.exe`
+            - **macOS**: Universal `.dmg` bundle (Intel + Apple Silicon)
+            - **Linux**: `.AppImage` executable
+
+            ## Installation
+
+            See [QUICK_START.md](https://github.com/sonarsniffer/sonarsniffer/blob/main/QUICK_START.md) for installation instructions.
+
+            ## Known Issues
+
+            See [BETA_FEEDBACK_FORM.md](https://github.com/sonarsniffer/sonarsniffer/blob/main/BETA_FEEDBACK_FORM.md) for known issues and reporting bugs.
+
+            ## Testing
+
+            Please participate in beta testing using the [BETA_TESTING_GUIDE.md](https://github.com/sonarsniffer/sonarsniffer/blob/main/BETA_TESTING_GUIDE.md).

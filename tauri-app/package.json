@@ -1,0 +1,35 @@
+{
+    "name": "sonarsniffer-desktop",
+    "version": "0.1.0",
+    "description": "SonarSniffer - Cross-platform desktop application for sonar data processing and analysis",
+    "type": "module",
+    "scripts": {
+        "dev": "npm run tauri -- dev",
+        "dev:ui": "vite",
+        "build": "npm run build:ui && npm run tauri -- build",
+        "build:ui": "vite build",
+        "build:windows": "npm run build:ui && npm run tauri -- build --target x86_64-pc-windows-msvc",
+        "build:msi": "npm run build:ui && npm run tauri -- build --target x86_64-pc-windows-msvc -- --msi",
+        "lint": "eslint . --ext js,jsx,ts,tsx",
+        "preview": "vite preview",
+        "tauri": "tauri"
+    },
+    "dependencies": {
+        "@tauri-apps/api": "^1.5.0",
+        "axios": "^1.5.0",
+        "date-fns": "^2.30.0",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "react-router-dom": "^6.14.0"
+    },
+    "devDependencies": {
+        "@tauri-apps/cli": "^1.6.3",
+        "@types/react": "^18.2.0",
+        "@types/react-dom": "^18.2.0",
+        "@vitejs/plugin-react": "^4.0.0",
+        "eslint": "^8.40.0",
+        "eslint-plugin-react": "^7.32.0",
+        "typescript": "^5.1.0",
+        "vite": "^4.4.0"
+    }
+}
