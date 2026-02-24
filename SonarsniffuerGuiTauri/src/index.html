@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SonarSniffer GUI</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+
+  <body>
+    <main class="app-shell">
+      <header class="hero">
+        <div class="brand-row">
+          <img src="/assets/sonar_sniffer_vizsla.svg" class="logo sniffer" alt="Sonar Sniffer Vizsla logo" />
+          <div class="brand-text">
+            <h1 class="sniffer-title">Sonar Sniffer</h1>
+            <div class="sniffer-sub">by <span class="nautidog">NautiDog Sailing</span></div>
+          </div>
+        </div>
+        <p class="hero-desc">
+          Echo-locating sonar pings, Vizsla style.<br>
+          <span class="hero-desc-small">Run Sonar Files and locate real-world sample corpora for SL2/SL3/DAT/JSF/XTF validation.</span>
+        </p>
+      </header>
+
+      <section class="panel" id="panel-parser">
+        <h2>Parser Pipeline</h2>
+        <form id="rsd-form" class="panel-form">
+          <div class="picker-row">
+            <button type="button" id="file-btn">Select Sonar File</button>
+            <span id="file-label" class="path-label">No file selected</span>
+          </div>
+
+          <div class="options-grid">
+            <label><input type="checkbox" id="video-opt" checked /> Video Export</label>
+            <label><input type="checkbox" id="kml-opt" checked /> KML Export</label>
+            <label><input type="checkbox" id="kmz-opt" checked /> KMZ Export</label>
+            <label><input type="checkbox" id="mbtiles-opt" checked /> MBTiles</label>
+            <label><input type="checkbox" id="mosaic-opt" checked /> Mosaic PNG</label>
+            <label><input type="checkbox" id="waterfall-opt" checked /> Waterfall PNG</label>
+            <label><input type="checkbox" id="arcgis-opt" checked /> ArcGIS Sidecar</label>
+            <label><input type="checkbox" id="viewer-opt" checked /> Viewer Bundle</label>
+          </div>
+
+          <div class="picker-row">
+            <button type="button" id="output-dir-btn">Browse…</button>
+            <input type="text" id="output-dir" placeholder="Optional output directory" />
+          </div>
+
+          <button type="submit" id="run-btn">Run Parser</button>
+        </form>
+        <div id="output-summary" class="result-box"></div>
+      </section>
+
+      <details class="panel advanced-menu" id="panel-firmware">
+        <summary><strong>Advanced</strong> (Firmware Analysis)</summary>
+        <div>
+          <form id="firmware-form" class="panel-form">
+            <div class="picker-row">
+              <button type="button" id="firmware-btn">Select Firmware File</button>
+              <span id="firmware-label" class="path-label">No file selected</span>
+            </div>
+            <button type="submit" id="firmware-run-btn">Analyze Firmware</button>
+          </form>
+          <pre id="firmware-summary" class="result-box"></pre>
+        </div>
+      </details>
+
+      <section class="panel" id="panel-corpus">
+        <h2>Corpus Discovery</h2>
+        <form id="corpus-form" class="panel-form">
+          <div class="picker-row">
+            <button type="button" id="corpus-btn">Select Corpus Folder</button>
+            <span id="corpus-label" class="path-label">No folder selected</span>
+          </div>
+          <button type="submit" id="corpus-run-btn">Scan For Real Samples</button>
+        </form>
+        <pre id="corpus-summary" class="result-box"></pre>
+      </section>
+    </main>
+  </body>
+</html>
