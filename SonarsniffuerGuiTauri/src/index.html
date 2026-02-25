@@ -43,6 +43,19 @@
             <label><input type="checkbox" id="viewer-opt" checked /> Viewer Bundle</label>
           </div>
 
+          <div class="colormap-row">
+            <label for="colormap-opt" class="colormap-label">Colour palette:</label>
+            <select id="colormap-opt">
+              <option value="sonar">Sonar (default)</option>
+              <option value="grayscale">Grayscale</option>
+              <option value="ocean">Ocean</option>
+              <option value="inferno">Inferno</option>
+              <option value="iron">Iron</option>
+              <option value="rainbow">Rainbow</option>
+              <option value="plasma">Plasma</option>
+            </select>
+          </div>
+
           <div class="picker-row">
             <button type="button" id="output-dir-btn">Browse…</button>
             <input type="text" id="output-dir" placeholder="Optional output directory" />

@@ -36,6 +36,8 @@ pub struct PipelineOptions {
     pub waterfall: bool,
     pub arcgis: bool,
     pub web_viewer: bool,
+    #[serde(default)]
+    pub colormap: String,
 }
 
 impl Default for PipelineOptions {
@@ -50,6 +52,7 @@ impl Default for PipelineOptions {
             waterfall: true,
             arcgis: true,
             web_viewer: true,
+            colormap: "sonar".to_string(),
         }
     }
 }
@@ -80,72 +83,108 @@ pub fn build_outputs(
     }
 
     if options.mosaic {
-        artifacts.extend(write_mosaic_per_channel(parsed, &output_dir)?);
+        artifacts.extend(write_mosaic_per_channel(parsed, &output_dir, &options.colormap)?);
     }
 
     if options.mbtiles {
         let path = output_dir.join("sonar.mbtiles");
-        write_mbtiles(parsed, &path)?;
         let n = pings_by_channel(parsed).values().map(|v| v.len()).max().unwrap_or(0);
-        artifacts.push(OutputArtifact {
-            kind: "mbtiles".to_string(),
-            path: path.display().to_string(),
-            details: format!(
-                "MBTiles z0–z{} · {} pings · georeferenced bounds",
-                MBTILES_MAX_ZOOM, n
-            ),
-        });
+        match write_mbtiles(parsed, &path, &options.colormap) {
+            Ok(()) => artifacts.push(OutputArtifact {
+                kind: "mbtiles".to_string(),
+                path: path.display().to_string(),
+                details: format!(
+                    "MBTiles z0–z{} · {} pings · georeferenced bounds",
+                    MBTILES_MAX_ZOOM, n
+                ),
+            }),
+            Err(e) => artifacts.push(OutputArtifact {
+                kind: "mbtiles".to_string(),
+                path: path.display().to_string(),
+                details: format!("ERROR: {e:#}"),
+            }),
+        }
     }
 
     if options.kml {
         let path = output_dir.join("track.kml");
-        let n = write_kml(parsed, &path)?;
-        artifacts.push(OutputArtifact {
-            kind: "kml".to_string(),
-            path: path.display().to_string(),
-            details: format!(
-                "Trackline + {} depth placemarks · styled · LookAt camera",
-                n
-            ),
-        });
+        match write_kml(parsed, &path) {
+            Ok(n) => artifacts.push(OutputArtifact {
+                kind: "kml".to_string(),
+                path: path.display().to_string(),
+                details: format!(
+                    "Trackline + {} depth placemarks · styled · LookAt camera",
+                    n
+                ),
+            }),
+            Err(e) => artifacts.push(OutputArtifact {
+                kind: "kml".to_string(),
+                path: path.display().to_string(),
+                details: format!("ERROR: {e:#}"),
+            }),
+        }
     }
 
     if options.kmz {
         let kml = output_dir.join("track.kml");
-        if !kml.exists() {
-            write_kml(parsed, &kml)?;
+        let kml_ready = kml.exists() || write_kml(parsed, &kml).is_ok();
+        if kml_ready {
+            let kmz = output_dir.join("track.kmz");
+            match write_kmz(&kml, &kmz, parsed, &output_dir, &options.colormap) {
+                Ok(has_overlay) => artifacts.push(OutputArtifact {
+                    kind: "kmz".to_string(),
+                    path: kmz.display().to_string(),
+                    details: if has_overlay {
+                        "KMZ with stitched sidescan GroundOverlay georeferenced to sonar swath".to_string()
+                    } else {
+                        "KMZ + trackline (no GPS bounding box — GroundOverlay skipped)".to_string()
+                    },
+                }),
+                Err(e) => artifacts.push(OutputArtifact {
+                    kind: "kmz".to_string(),
+                    path: output_dir.join("track.kmz").display().to_string(),
+                    details: format!("ERROR: {e:#}"),
+                }),
+            }
+        } else {
+            artifacts.push(OutputArtifact {
+                kind: "kmz".to_string(),
+                path: output_dir.join("track.kmz").display().to_string(),
+                details: "Skipped — KML prerequisite failed".to_string(),
+            });
         }
-        let kmz = output_dir.join("track.kmz");
-        let has_overlay = write_kmz(&kml, &kmz, parsed)?;
-        artifacts.push(OutputArtifact {
-            kind: "kmz".to_string(),
-            path: kmz.display().to_string(),
-            details: if has_overlay {
-                "Compressed KML with georeferenced mosaic GroundOverlay".to_string()
-            } else {
-                "Compressed KML (no GPS coords — GroundOverlay skipped)".to_string()
-            },
-        });
     }
 
     if options.arcgis {
         let path = output_dir.join("arcgis_layer.json");
-        write_arcgis_sidecar(parsed, &path)?;
-        artifacts.push(OutputArtifact {
-            kind: "arcgis".to_string(),
-            path: path.display().to_string(),
-            details: "ArcGIS EsriJSON FeatureCollection with all ping attributes".to_string(),
-        });
+        match write_arcgis_sidecar(parsed, &path) {
+            Ok(()) => artifacts.push(OutputArtifact {
+                kind: "arcgis".to_string(),
+                path: path.display().to_string(),
+                details: "ArcGIS EsriJSON FeatureCollection with all ping attributes".to_string(),
+            }),
+            Err(e) => artifacts.push(OutputArtifact {
+                kind: "arcgis".to_string(),
+                path: path.display().to_string(),
+                details: format!("ERROR: {e:#}"),
+            }),
+        }
     }
 
     if options.web_viewer {
         let viewer_dir = output_dir.join("viewer");
-        write_native_viewer(parsed, &viewer_dir)?;
-        artifacts.push(OutputArtifact {
-            kind: "viewer".to_string(),
-            path: viewer_dir.display().to_string(),
-            details: "MapLibre viewer · track + depth-coloured ping layer · click popup".to_string(),
-        });
+        match write_native_viewer(parsed, &viewer_dir) {
+            Ok(()) => artifacts.push(OutputArtifact {
+                kind: "viewer".to_string(),
+                path: viewer_dir.display().to_string(),
+                details: "MapLibre viewer · track + depth-coloured ping layer · click popup".to_string(),
+            }),
+            Err(e) => artifacts.push(OutputArtifact {
+                kind: "viewer".to_string(),
+                path: viewer_dir.display().to_string(),
+                details: format!("ERROR: {e:#}"),
+            }),
+        }
     }
 
     Ok(OutputSummary {
@@ -154,24 +193,15 @@ pub fn build_outputs(
     })
 }
 
-// ── Colour / statistics helpers ───────────────────────────────────────────────
+// ── Colour palette system ────────────────────────────────────────────────────
 
-/// False-colour sonar palette: black → blue → cyan → green → yellow → red → white.
-fn sonar_colormap(n: f32) -> Rgb<u8> {
-    const STOPS: &[(f32, [u8; 3])] = &[
-        (0.00, [0, 0, 0]),
-        (0.15, [0, 0, 210]),
-        (0.35, [0, 160, 255]),
-        (0.55, [0, 220, 80]),
-        (0.70, [230, 200, 0]),
-        (0.85, [255, 55, 0]),
-        (1.00, [255, 255, 240]),
-    ];
+/// Multi-stop linear interpolation between RGB colour stops.
+fn lerp_colormap(n: f32, stops: &[(f32, [u8; 3])]) -> Rgb<u8> {
     let n = n.clamp(0.0, 1.0);
-    for i in 1..STOPS.len() {
-        let (t0, c0) = STOPS[i - 1];
-        let (t1, c1) = STOPS[i];
-        if n <= t1 || i == STOPS.len() - 1 {
+    for i in 1..stops.len() {
+        let (t0, c0) = stops[i - 1];
+        let (t1, c1) = stops[i];
+        if n <= t1 || i == stops.len() - 1 {
             let t = if t1 > t0 { (n - t0) / (t1 - t0) } else { 1.0 };
             return Rgb([
                 (c0[0] as f32 + (c1[0] as f32 - c0[0] as f32) * t).clamp(0.0, 255.0) as u8,
@@ -183,29 +213,118 @@ fn sonar_colormap(n: f32) -> Rgb<u8> {
     Rgb([255, 255, 240])
 }
 
-/// Pth-percentile of a u16 slice (returns 0 if empty).
-fn percentile_u16(samples: &[u16], pct: usize) -> u16 {
-    if samples.is_empty() {
-        return 0;
+/// Map a normalised intensity `n ∈ [0,1]` to RGB using one of the named palettes.
+/// Unknown names fall back to the `"sonar"` palette.
+pub fn apply_colormap(n: f32, name: &str) -> Rgb<u8> {
+    let nm = if name.is_empty() { "sonar" } else { name };
+    match nm {
+        "grayscale" => {
+            let v = (n.clamp(0.0, 1.0) * 255.0) as u8;
+            Rgb([v, v, v])
+        }
+        "ocean" => lerp_colormap(n, &[
+            (0.00, [  0,   0,  80]),
+            (0.30, [  0,  40, 120]),
+            (0.55, [  0, 100, 160]),
+            (0.75, [ 30, 180, 200]),
+            (0.90, [160, 230, 240]),
+            (1.00, [255, 255, 255]),
+        ]),
+        "inferno" => lerp_colormap(n, &[
+            (0.00, [  0,   0,   4]),
+            (0.20, [ 40,  11,  84]),
+            (0.40, [101,  21, 110]),
+            (0.60, [182,  55,  76]),
+            (0.80, [237, 121,  18]),
+            (1.00, [252, 255, 164]),
+        ]),
+        "iron" => lerp_colormap(n, &[
+            (0.00, [  0,   0,   0]),
+            (0.25, [  0,   0, 200]),
+            (0.50, [160,   0, 200]),
+            (0.75, [255, 160,   0]),
+            (1.00, [255, 255, 200]),
+        ]),
+        "rainbow" => lerp_colormap(n, &[
+            (0.00, [  0,   0, 255]),
+            (0.25, [  0, 255, 255]),
+            (0.50, [  0, 255,   0]),
+            (0.75, [255, 255,   0]),
+            (1.00, [255,   0,   0]),
+        ]),
+        "plasma" => lerp_colormap(n, &[
+            (0.00, [ 13,   8, 135]),
+            (0.25, [126,   3, 167]),
+            (0.50, [204,  71, 120]),
+            (0.75, [248, 149,  64]),
+            (1.00, [240, 249,  33]),
+        ]),
+        _ => lerp_colormap(n, &[   // "sonar" (default & fallback)
+            (0.00, [  0,   0,   0]),
+            (0.15, [  0,   0, 210]),
+            (0.35, [  0, 160, 255]),
+            (0.55, [  0, 220,  80]),
+            (0.70, [230, 200,   0]),
+            (0.85, [255,  55,   0]),
+            (1.00, [255, 255, 240]),
+        ]),
     }
-    let mut s = samples.to_vec();
-    s.sort_unstable();
-    s[(s.len() - 1) * pct / 100]
 }
 
-/// 99th-percentile of sample amplitudes across a slice of pings.
-/// Subsamples at most 100_000 values to bound memory.
-fn global_scale(pings: &[&Ping]) -> f32 {
-    let total: usize = pings.iter().map(|p| p.samples.len()).sum();
-    if total == 0 {
-        return 1.0;
+// ── Per-ping image helpers ────────────────────────────────────────────────────
+
+/// Resample one sonar ping into a `dst_w`-wide grey byte row using:
+/// * bilinear horizontal interpolation (handles variable sample counts)
+/// * per-ping 2 %–98 % percentile contrast stretch
+/// * gamma correction to lift shadow detail
+fn ping_to_gray_row(ping: &Ping, dst_w: usize, gamma: f32) -> Vec<u8> {
+    let mut row = vec![0u8; dst_w];
+    let src = &ping.samples;
+    if src.is_empty() || dst_w == 0 {
+        return row;
     }
-    let step = (total / 100_000).max(1);
-    let vals: Vec<u16> = pings
+    // Collect non-zero samples for robust percentile estimation
+    let mut nonzero: Vec<u16> = src.iter().copied().filter(|&x| x > 0).collect();
+    if nonzero.is_empty() {
+        return row;
+    }
+    nonzero.sort_unstable();
+    let nz = nonzero.len();
+    let p2  = nonzero[(nz / 50).min(nz - 1)] as f32;
+    let p98 = nonzero[(nz * 49 / 50).min(nz - 1)] as f32;
+    let span = (p98 - p2).max(1.0);
+
+    let src_n = src.len();
+    let inv = if dst_w <= 1 || src_n <= 1 {
+        0.0_f32
+    } else {
+        (src_n - 1) as f32 / (dst_w - 1) as f32
+    };
+    for i in 0..dst_w {
+        let flt  = i as f32 * inv;
+        let lo   = flt as usize;
+        let hi   = (lo + 1).min(src_n - 1);
+        let frac = flt - lo as f32;
+        let v    = src[lo] as f32 * (1.0 - frac) + src[hi] as f32 * frac;
+        let norm = ((v - p2) / span).clamp(0.0, 1.0).powf(gamma);
+        row[i]   = (norm * 255.0) as u8;
+    }
+    row
+}
+
+/// Canonical output width for a channel: median non-zero sample count clamped
+/// to `max_w`.  The median avoids giant images from a handful of anomalous pings.
+fn canonical_width(pings: &[&Ping], max_w: u32) -> u32 {
+    let mut counts: Vec<usize> = pings
         .iter()
-        .flat_map(|p| p.samples.iter().copied().step_by(step))
+        .map(|p| p.samples.len())
+        .filter(|&n| n > 0)
         .collect();
-    percentile_u16(&vals, 99).max(1) as f32
+    if counts.is_empty() {
+        return 512_u32.min(max_w).max(1);
+    }
+    counts.sort_unstable();
+    (counts[counts.len() / 2] as u32).min(max_w).max(1)
 }
 
 /// Group pings by channel ID; preserves temporal ping ordering.
@@ -217,54 +336,90 @@ fn pings_by_channel(parsed: &ParseResult) -> BTreeMap<u32, Vec<&Ping>> {
     map
 }
 
-/// Render a slice of pings as a GRAY8 image with uniform index-mapping
-/// (nearest-neighbour) and 99th-percentile global amplitude normalisation.
-/// Output is clamped to `max_w × max_h`.
+/// Render a channel's pings as a GRAY8 waterfall image.
+/// Each ping occupies one output row (vertically subsampled for large files).
+/// Uses bilinear horizontal resampling + per-ping 2–98 % percentile stretch + gamma.
 fn render_gray(pings: &[&Ping], max_w: u32, max_h: u32) -> GrayImage {
     if pings.is_empty() {
         return ImageBuffer::from_pixel(1, 1, image::Luma([0u8]));
     }
-    let src_w = pings.iter().map(|p| p.samples.len()).max().unwrap_or(1).max(1);
+    let img_w = canonical_width(pings, max_w);
     let src_h = pings.len();
-    let img_w = (src_w as u32).min(max_w).max(1);
     let img_h = (src_h as u32).min(max_h).max(1);
-    let scale = global_scale(pings);
-    let mut img: GrayImage = ImageBuffer::from_pixel(img_w, img_h, image::Luma([0u8]));
+    let mut img: GrayImage = ImageBuffer::new(img_w, img_h);
     for dst_y in 0..img_h {
         let src_y = (dst_y as usize * src_h) / img_h as usize;
-        let ping = &pings[src_y.min(src_h - 1)];
-        for dst_x in 0..img_w {
-            let src_x = (dst_x as usize * src_w) / img_w as usize;
-            let v = ping.samples.get(src_x).copied().unwrap_or(0);
-            let n = (v as f32 / scale * 255.0).clamp(0.0, 255.0) as u8;
-            img.put_pixel(dst_x, dst_y, image::Luma([n]));
+        let ping  = &pings[src_y.min(src_h - 1)];
+        let row   = ping_to_gray_row(ping, img_w as usize, WATERFALL_GAMMA);
+        for (x, &v) in row.iter().enumerate() {
+            img.put_pixel(x as u32, dst_y, image::Luma([v]));
         }
     }
     img
 }
 
-/// Render a slice of pings as a false-colour RGB mosaic using `sonar_colormap`.
-fn render_mosaic_rgb(pings: &[&Ping], max_w: u32, max_h: u32) -> RgbImage {
+/// Render a channel's pings as a false-colour RGB mosaic.
+/// Each ping occupies one output row; uses bilinear resampling + per-ping stretch + gamma.
+fn render_mosaic_rgb(pings: &[&Ping], max_w: u32, max_h: u32, colormap: &str) -> RgbImage {
     if pings.is_empty() {
         return ImageBuffer::from_pixel(1, 1, Rgb([0u8, 0, 0]));
     }
-    let src_w = pings.iter().map(|p| p.samples.len()).max().unwrap_or(1).max(1);
+    let img_w = canonical_width(pings, max_w);
     let src_h = pings.len();
-    let img_w = (src_w as u32).min(max_w).max(1);
     let img_h = (src_h as u32).min(max_h).max(1);
-    let scale = global_scale(pings);
-    let mut img: RgbImage = ImageBuffer::from_pixel(img_w, img_h, Rgb([0u8, 0, 0]));
+    let mut img: RgbImage = ImageBuffer::new(img_w, img_h);
     for dst_y in 0..img_h {
         let src_y = (dst_y as usize * src_h) / img_h as usize;
-        let ping = &pings[src_y.min(src_h - 1)];
-        for dst_x in 0..img_w {
-            let src_x = (dst_x as usize * src_w) / img_w as usize;
-            let v = ping.samples.get(src_x).copied().unwrap_or(0);
-            let n = (v as f32 / scale).clamp(0.0, 1.0);
-            img.put_pixel(dst_x, dst_y, sonar_colormap(n));
+        let ping  = &pings[src_y.min(src_h - 1)];
+        let gray  = ping_to_gray_row(ping, img_w as usize, MOSAIC_GAMMA);
+        for (x, &g) in gray.iter().enumerate() {
+            img.put_pixel(x as u32, dst_y, apply_colormap(g as f32 / 255.0, colormap));
         }
     }
     img
+}
+
+/// Stitch port + starboard sidescan pings into a single butterfly mosaic.
+/// Port arm (ch4) is reversed so both arms radiate outward from a shared nadir line.
+/// Returns `None` when both inputs are empty.
+fn render_sidescan_stitched(
+    port_pings: &[&Ping],
+    star_pings: &[&Ping],
+    single_w:   u32,
+    max_h:      u32,
+    colormap:   &str,
+) -> Option<RgbImage> {
+    if port_pings.is_empty() && star_pings.is_empty() {
+        return None;
+    }
+    let n_pings = port_pings.len().max(star_pings.len());
+    let src_h   = n_pings;
+    let img_h   = (n_pings as u32).min(max_h).max(1);
+    let total_w = single_w * 2;
+    let mut img: RgbImage = ImageBuffer::from_pixel(total_w, img_h, Rgb([5u8, 10, 20]));
+
+    for dst_y in 0..img_h {
+        let src_y = (dst_y as usize * src_h) / img_h as usize;
+
+        // Starboard → right half (nadir at left edge of this half)
+        if !star_pings.is_empty() {
+            let ping = &star_pings[src_y.min(star_pings.len() - 1)];
+            let gray = ping_to_gray_row(ping, single_w as usize, MOSAIC_GAMMA);
+            for (xi, &g) in gray.iter().enumerate() {
+                img.put_pixel(single_w + xi as u32, dst_y, apply_colormap(g as f32 / 255.0, colormap));
+            }
+        }
+        // Port → left half, reversed so the outer edge is at x = 0
+        if !port_pings.is_empty() {
+            let ping = &port_pings[src_y.min(port_pings.len() - 1)];
+            let gray = ping_to_gray_row(ping, single_w as usize, MOSAIC_GAMMA);
+            for (xi, &g) in gray.iter().enumerate() {
+                let dst_x = single_w - 1 - xi as u32;
+                img.put_pixel(dst_x, dst_y, apply_colormap(g as f32 / 255.0, colormap));
+            }
+        }
+    }
+    Some(img)
 }
 
 /// Encode an RgbImage to PNG bytes in memory (used by KMZ ground overlay).
@@ -342,6 +497,12 @@ impl BBox {
 
 const WATERFALL_MAX_W: u32 = 4096;
 const WATERFALL_MAX_H: u32 = 8192;
+/// Gamma < 1 lifts shadow detail; 0.70 gives good waterfall contrast.
+const WATERFALL_GAMMA: f32 = 0.70;
+/// Slightly stronger lift for false-colour mosaics.
+const MOSAIC_GAMMA: f32 = 0.65;
+/// Per-channel width of the stitched butterfly mosaic / KMZ ground overlay.
+const MOSAIC_COMBINED_W: u32 = 2048;
 const MBTILES_MAX_ZOOM: u8 = 0;
 const KML_MAX_PLACEMARKS: usize = 600;
 const VIEWER_MAX_PINGS: usize = 2000;
@@ -353,23 +514,25 @@ fn write_waterfall_per_channel(
     let channels = pings_by_channel(parsed);
     let mut arts = Vec::new();
     for (ch, pings) in &channels {
-        let img = render_gray(pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
+        let img   = render_gray(pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
         let fname = format!("waterfall_ch{ch}.png");
-        let path = output_dir.join(&fname);
-        img.save(&path)
-            .with_context(|| format!("Failed to write {fname}"))?;
+        let path  = output_dir.join(&fname);
         let ch_label = channel_label(parsed, *ch);
-        arts.push(OutputArtifact {
-            kind: "waterfall".to_string(),
-            path: path.display().to_string(),
-            details: format!(
-                "Ch {} ({}) · {}×{} · 99p global normalisation",
-                ch,
-                ch_label,
-                img.width(),
-                img.height()
-            ),
-        });
+        match img.save(&path) {
+            Ok(()) => arts.push(OutputArtifact {
+                kind: "waterfall".to_string(),
+                path: path.display().to_string(),
+                details: format!(
+                    "Ch {} ({}) · {}×{} · per-ping 2–98% stretch · γ{WATERFALL_GAMMA:.2}",
+                    ch, ch_label, img.width(), img.height()
+                ),
+            }),
+            Err(e) => arts.push(OutputArtifact {
+                kind: "waterfall".to_string(),
+                path: path.display().to_string(),
+                details: format!("ERROR writing {fname}: {e:#}"),
+            }),
+        }
     }
     Ok(arts)
 }
@@ -377,32 +540,65 @@ fn write_waterfall_per_channel(
 fn write_mosaic_per_channel(
     parsed: &ParseResult,
     output_dir: &Path,
+    colormap: &str,
 ) -> Result<Vec<OutputArtifact>> {
     let channels = pings_by_channel(parsed);
     let mut arts = Vec::new();
+
+    // Per-channel mosaics
     for (ch, pings) in &channels {
-        let img = render_mosaic_rgb(pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
+        let img   = render_mosaic_rgb(pings, WATERFALL_MAX_W, WATERFALL_MAX_H, colormap);
         let fname = format!("mosaic_ch{ch}.png");
-        let path = output_dir.join(&fname);
-        img.save(&path)
-            .with_context(|| format!("Failed to write {fname}"))?;
+        let path  = output_dir.join(&fname);
         let ch_label = channel_label(parsed, *ch);
-        arts.push(OutputArtifact {
-            kind: "mosaic".to_string(),
-            path: path.display().to_string(),
-            details: format!(
-                "Ch {} ({}) · {}×{} · false-colour sonar palette",
-                ch,
-                ch_label,
-                img.width(),
-                img.height()
-            ),
-        });
+        match img.save(&path) {
+            Ok(()) => arts.push(OutputArtifact {
+                kind: "mosaic".to_string(),
+                path: path.display().to_string(),
+                details: format!(
+                    "Ch {} ({}) · {}×{} · {} palette",
+                    ch, ch_label, img.width(), img.height(), colormap
+                ),
+            }),
+            Err(e) => arts.push(OutputArtifact {
+                kind: "mosaic".to_string(),
+                path: path.display().to_string(),
+                details: format!("ERROR writing {fname}: {e:#}"),
+            }),
+        }
+    }
+
+    // Stitched butterfly mosaic when port (ch4/ch0) + starboard (ch5/ch1) detected
+    let port_key = [4u32, 0].iter().find(|&&k| channels.contains_key(&k)).copied();
+    let star_key = [5u32, 1].iter().find(|&&k| channels.contains_key(&k)).copied();
+    if let (Some(pk), Some(sk)) = (port_key, star_key) {
+        let port_pings = &channels[&pk];
+        let star_pings = &channels[&sk];
+        if let Some(combined) = render_sidescan_stitched(
+            port_pings, star_pings, MOSAIC_COMBINED_W, WATERFALL_MAX_H, colormap,
+        ) {
+            let path = output_dir.join("mosaic_combined.png");
+            match combined.save(&path) {
+                Ok(()) => arts.push(OutputArtifact {
+                    kind: "mosaic_combined".to_string(),
+                    path: path.display().to_string(),
+                    details: format!(
+                        "Stitched port+starboard butterfly · {}×{} · {} palette",
+                        combined.width(), combined.height(), colormap
+                    ),
+                }),
+                Err(e) => arts.push(OutputArtifact {
+                    kind: "mosaic_combined".to_string(),
+                    path: path.display().to_string(),
+                    details: format!("ERROR writing mosaic_combined.png: {e:#}"),
+                }),
+            }
+        }
     }
     Ok(arts)
 }
 
-fn write_mbtiles(parsed: &ParseResult, path: &Path) -> Result<()> {
+fn write_mbtiles(parsed: &ParseResult, path: &Path, colormap: &str) -> Result<()> {
     let conn = Connection::open(path)
         .with_context(|| format!("Failed to create MBTiles DB: {}", path.display()))?;
 
@@ -447,7 +643,7 @@ fn write_mbtiles(parsed: &ParseResult, path: &Path) -> Result<()> {
         .cloned()
         .unwrap_or_default();
 
-    let tile = render_mosaic_rgb(&dominant, 256, 256);
+    let tile = render_mosaic_rgb(&dominant, 256, 256, colormap);
     let png = encode_png_rgb(&tile)?;
 
     conn.execute(
@@ -588,16 +784,32 @@ Samples: $[sample_count]]]></text>
 }
 
 /// Write a KMZ containing the KML and (if GPS is available) a georeferenced
-/// mosaic GroundOverlay PNG.  Returns `true` if the GroundOverlay was embedded.
-fn write_kmz(kml_path: &Path, kmz_path: &Path, parsed: &ParseResult) -> Result<bool> {
+/// sidescan GroundOverlay.  Prefers `mosaic_combined.png` from `output_dir`;
+/// falls back to an inline render of the dominant channel.
+/// Returns `true` if the GroundOverlay was embedded.
+fn write_kmz(
+    kml_path:   &Path,
+    kmz_path:   &Path,
+    parsed:     &ParseResult,
+    output_dir: &Path,
+    colormap:   &str,
+) -> Result<bool> {
     let kml_str = fs::read_to_string(kml_path)
         .with_context(|| format!("Failed to read KML for KMZ: {}", kml_path.display()))?;
 
-    // Generate mosaic PNG for the GroundOverlay
+    // Build overlay PNG: prefer already-rendered combined mosaic for quality
     let overlay: Option<(Vec<u8>, BBox)> = BBox::from_pings(&parsed.pings).and_then(|bbox| {
+        // 1. Try pre-rendered combined mosaic (highest quality, correct aspect)
+        let combined_path = output_dir.join("mosaic_combined.png");
+        if combined_path.exists() {
+            if let Ok(bytes) = fs::read(&combined_path) {
+                return Some((bytes, bbox));
+            }
+        }
+        // 2. Fall back to inline render of dominant channel at overlay resolution
         let channels = pings_by_channel(parsed);
         let dominant: Vec<&Ping> = channels.values().max_by_key(|v| v.len()).cloned()?;
-        let img = render_mosaic_rgb(&dominant, 512, 512);
+        let img = render_mosaic_rgb(&dominant, MOSAIC_COMBINED_W, WATERFALL_MAX_H, colormap);
         encode_png_rgb(&img).ok().map(|png| (png, bbox))
     });
 
@@ -605,8 +817,9 @@ fn write_kmz(kml_path: &Path, kmz_path: &Path, parsed: &ParseResult) -> Result<b
     let final_kml = if let Some((_, bbox)) = &overlay {
         let ground_overlay = format!(
             "  <GroundOverlay>\
-            \n    <name>Sonar Mosaic</name>\
+            \n    <name>Sonar Sidescan Mosaic</name>\
             \n    <color>c8ffffff</color>\
+            \n    <drawOrder>1</drawOrder>\
             \n    <Icon><href>mosaic.png</href></Icon>\
             \n    <LatLonBox>\
             \n      <north>{:.7}</north>\

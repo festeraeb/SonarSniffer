@@ -145,6 +145,32 @@ body {
   font-size: 0.9rem;
 }
 
+.colormap-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0 2px;
+}
+
+.colormap-label {
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+#colormap-opt {
+  font-size: 0.9rem;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--sniffer-water, #4da8da);
+  background: var(--panel-bg, #1e2d45);
+  color: inherit;
+  cursor: pointer;
+}
+
+#colormap-opt:focus {
+  outline: 2px solid var(--sniffer-water, #4da8da);
+}
+
 .logo {
   width: 72px;
   height: 72px;

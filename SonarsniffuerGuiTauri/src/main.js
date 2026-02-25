@@ -24,14 +24,11 @@ function esc(str) {
     .replace(/"/g, "&quot;");
 }
 
-function depthRange(pings) {
-  if (!pings || pings.length === 0) return "—";
-  const depths = pings.map((p) => p.depth_ft).filter((d) => d > 0);
-  if (depths.length === 0) return "—";
-  const min = Math.min(...depths).toFixed(1);
-  const max = Math.max(...depths).toFixed(1);
-  const avg = (depths.reduce((a, b) => a + b, 0) / depths.length).toFixed(1);
-  return `${min} ft – ${max} ft (avg ${avg} ft)`;
+function depthRange(stats) {
+  // stats = [min_ft, max_ft, avg_ft] from the Rust backend,
+  // computed before pings are cleared so they survive the IPC response.
+  if (!stats || stats.length < 3 || (stats[0] === 0 && stats[1] === 0)) return "—";
+  return `${stats[0].toFixed(1)} ft – ${stats[1].toFixed(1)} ft (avg ${stats[2].toFixed(1)} ft)`;
 }
 
 function renderPipelineResult(result) {
@@ -46,7 +43,7 @@ function renderPipelineResult(result) {
   const channels = parse.channel_counts
     ? Object.keys(parse.channel_counts).join(", ")
     : "—";
-  const depth = depthRange(parse.pings);
+  const depth = depthRange(result.depth_stats);
 
   let html = `<div class="pr-header ${statusClass}">${esc(result.status)}</div>`;
 
@@ -182,6 +179,7 @@ window.addEventListener("DOMContentLoaded", () => {
       waterfall: document.getElementById("waterfall-opt").checked,
       arcgis: document.getElementById("arcgis-opt").checked,
       webViewer: document.getElementById("viewer-opt").checked,
+      colormap: document.getElementById("colormap-opt").value,
       outputDir: outputDir.length ? outputDir : null,
     };
 

@@ -1,4 +1,4 @@
-use crate::garmin_rsd_parser::ParseResult;
+use crate::garmin_rsd_parser::{ParseResult, Ping};
 use serde::Serialize;
 use std::path::Path;
 
@@ -22,11 +22,21 @@ pub fn run_video_export(_parsed: &ParseResult, _output_dir: &Path) -> VideoExpor
     }
 }
 
+/// Owned-pings variant called from the background thread (lib.rs).
+#[cfg(not(feature = "video-gstreamer"))]
+pub fn run_video_export_pings(_pings: Vec<Ping>, _output_dir: &Path) -> VideoExportResult {
+    VideoExportResult {
+        enabled: false,
+        status: "Video export requires the video-gstreamer feature.".to_string(),
+        output_path: None,
+    }
+}
+
 // ── GStreamer implementation ───────────────────────────────────────────────────
 
 #[cfg(feature = "video-gstreamer")]
 pub fn run_video_export(parsed: &ParseResult, output_dir: &Path) -> VideoExportResult {
-    match export_inner(parsed, output_dir) {
+    match export_inner_with_encoder(parsed, output_dir, "x264enc speed-preset=ultrafast tune=zerolatency") {
         Ok(r) => r,
         Err(e) => VideoExportResult {
             enabled: true,
@@ -36,10 +46,45 @@ pub fn run_video_export(parsed: &ParseResult, output_dir: &Path) -> VideoExportR
     }
 }
 
+/// Owned-pings variant for the background thread.
 #[cfg(feature = "video-gstreamer")]
-fn export_inner(
+pub fn run_video_export_pings(pings: Vec<Ping>, output_dir: &Path) -> VideoExportResult {
+    // Build a minimal ParseResult shell (no need for channels/histograms —
+    // export_inner only accesses parsed.pings).
+    let parsed = ParseResult {
+        record_count: pings.len(),
+        recovered_records: 0,
+        dropped_bytes: 0,
+        parser_magic: String::new(),
+        channels: Vec::new(),
+        channel_counts: Default::default(),
+        field_channel_counts: Default::default(),
+        unique_field_values: Default::default(),
+        unknown_channels: Vec::new(),
+        healing_actions: Vec::new(),
+        error_message: None,
+        pings,
+        crc_mismatch_count: 0,
+    };
+    // Try NVENC first, fall back to software x264
+    match export_inner_with_encoder(&parsed, output_dir, "nvh264enc") {
+        Ok(r) => r,
+        Err(_) => match export_inner_with_encoder(&parsed, output_dir, "x264enc speed-preset=ultrafast tune=zerolatency") {
+            Ok(r) => r,
+            Err(e) => VideoExportResult {
+                enabled: true,
+                status: format!("Video export failed: {e:#}"),
+                output_path: None,
+            },
+        },
+    }
+}
+
+#[cfg(feature = "video-gstreamer")]
+fn export_inner_with_encoder(
     parsed: &ParseResult,
     output_dir: &Path,
+    encoder: &str,
 ) -> anyhow::Result<VideoExportResult> {
     use anyhow::Context as _;
     use gstreamer as gst;
@@ -88,13 +133,15 @@ fn export_inner(
     // ── Build pipeline ────────────────────────────────────────────────────────
     // appsrc provides raw GRAY8 frames → x264enc (H.264) → mp4mux → file
     // Requires: gst-plugins-ugly (x264enc) + gst-plugins-good (mp4mux)
-    let pipeline_str = "appsrc name=src \
+    let pipeline_str = format!(
+        "appsrc name=src \
         ! videoconvert \
-        ! x264enc speed-preset=ultrafast tune=zerolatency \
+        ! {encoder} \
         ! mp4mux \
-        ! filesink name=fsink sync=false";
+        ! filesink name=fsink sync=false"
+    );
 
-    let element = gst::parse::launch(pipeline_str).map_err(|e| {
+    let element = gst::parse::launch(&pipeline_str).map_err(|e| {
         anyhow::anyhow!(
             "Pipeline parse failed: {e}. \
              Ensure gst-plugins-ugly (x264enc) and gst-plugins-good (mp4mux) are installed."

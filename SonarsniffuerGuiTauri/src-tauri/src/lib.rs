@@ -17,6 +17,8 @@ pub struct PipelineResponse {
     pub parse: garmin_rsd_parser::ParseResult,
     pub outputs: Option<outputs::OutputSummary>,
     pub video: Option<VideoExportResult>,
+    /// [min_ft, max_ft, avg_ft] computed before pings are cleared.
+    pub depth_stats: [f32; 3],
     pub status: String,
 }
 
@@ -63,7 +65,7 @@ pub fn run_pipeline_internal(file_name: &str, options: Option<PipelineOptions>) 
     let options = options.unwrap_or_default();
     let mut parser = GarminRSDParser::new();
     let path = Path::new(file_name);
-    let parse = parser.parse_file(path);
+    let mut parse = parser.parse_file(path);
 
     let outputs = if parse.error_message.is_none() {
         build_outputs(path, &parse, &options).ok()
@@ -71,9 +73,26 @@ pub fn run_pipeline_internal(file_name: &str, options: Option<PipelineOptions>) 
         None
     };
 
+    // Compute depth stats BEFORE clearing pings so the frontend can still show them.
+    let depth_stats = {
+        let depths: Vec<f32> = parse.pings.iter()
+            .map(|p| p.depth_ft)
+            .filter(|&d| d > 0.0)
+            .collect();
+        if depths.is_empty() {
+            [0.0_f32; 3]
+        } else {
+            let min = depths.iter().cloned().fold(f32::MAX, f32::min);
+            let max = depths.iter().cloned().fold(f32::MIN, f32::max);
+            let avg = depths.iter().sum::<f32>() / depths.len() as f32;
+            [min, max, avg]
+        }
+    };
+
+    // Video – spawn in a background thread so the IPC call returns immediately.
+    // We take the pings out of `parse` for the thread; this also prevents the
+    // massive JSON serialisation of ~80 k pings across the Tauri IPC bridge.
     let video = if options.video {
-        // Reuse the same output directory as the other artifacts (or fall back to
-        // the input file's parent so the MP4 always lands somewhere sensible).
         let vid_dir: PathBuf = outputs
             .as_ref()
             .map(|o| PathBuf::from(&o.output_dir))
@@ -82,8 +101,20 @@ pub fn run_pipeline_internal(file_name: &str, options: Option<PipelineOptions>) 
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|| PathBuf::from("."))
             });
-        Some(video::run_video_export(&parse, &vid_dir))
+        let pings_for_video = std::mem::take(&mut parse.pings);
+        let vid_dir_clone = vid_dir.clone();
+        std::thread::spawn(move || {
+            video::run_video_export_pings(pings_for_video, &vid_dir_clone);
+        });
+        Some(VideoExportResult {
+            enabled: true,
+            status: "Video rendering in background — check output folder for sonar_waterfall.mp4"
+                .to_string(),
+            output_path: Some(vid_dir.join("sonar_waterfall.mp4").display().to_string()),
+        })
     } else {
+        // Still clear pings to avoid 160 MB IPC serialisation
+        parse.pings.clear();
         None
     };
 
@@ -98,6 +129,7 @@ pub fn run_pipeline_internal(file_name: &str, options: Option<PipelineOptions>) 
         parse,
         outputs,
         video,
+        depth_stats,
         status,
     }
 }
