@@ -1,0 +1,77 @@
+name: Build Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install GStreamer
+        run: |
+          choco install gstreamer gstreamer-devel --yes
+          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64" >> $env:GITHUB_ENV
+          echo "C:\gstreamer\1.0\msvc_x86_64\bin" >> $env:GITHUB_PATH
+      - name: Build CLI binaries
+        run: cargo build --release --bin sonarsniffer-cli --bin parse_cli
+      - name: Package
+        run: |
+          mkdir dist
+          copy target\release\sonarsniffer-cli.exe dist\
+          copy target\release\parse_cli.exe dist\
+          copy desktop\ui\* dist\
+        shell: cmd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sonarsniffer-windows-x64
+          path: dist/
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install GStreamer
+        run: |
+          brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
+      - name: Build CLI binaries
+        run: cargo build --release --bin sonarsniffer-cli --bin parse_cli
+      - name: Package
+        run: |
+          mkdir dist
+          cp target/release/sonarsniffer-cli dist/
+          cp target/release/parse_cli dist/
+          cp desktop/ui/* dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sonarsniffer-macos-x64
+          path: dist/
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sonarsniffer-windows-x64
+          path: win
+      - uses: actions/download-artifact@v4
+        with:
+          name: sonarsniffer-macos-x64
+          path: mac
+      - name: Zip artifacts
+        run: |
+          cd win && zip -r ../SonarSniffer-Windows-x64.zip . && cd ..
+          cd mac && zip -r ../SonarSniffer-macOS-x64.zip . && cd ..
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            SonarSniffer-Windows-x64.zip
+            SonarSniffer-macOS-x64.zip
+          generate_release_notes: true

@@ -42,7 +42,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Bundled full-precision FDCT — internal nauticuvs-full only (never crates.io).
-nauticuvs = { path = "../nauticuvs", package = "nauticuvs-full" }
+nauticuvs = { path = "./nauticuvs", package = "nauticuvs-full" }
 
 # MBTiles output
 mbtiles = "0.15"
