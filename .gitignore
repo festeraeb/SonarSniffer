@@ -1,0 +1,9 @@
+/target
+/desktop/src-tauri/target
+/desktop/src-tauri/binaries/*.exe
+/desktop/src-tauri/binaries/*.dmg
+/test_files/
+*.rsd
+*.RSD
+*.sl2
+*.sl3
