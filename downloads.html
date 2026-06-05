@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SonarSniffer Downloads — CESAROps / NautiDog Sailing</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; background: #f5f6fa; color: #2c3e50; }
+    .header { background: linear-gradient(180deg, #2c3e50, #1a252f); color: #fff; text-align: center; padding: 40px 24px 24px; }
+    .header h1 { font-size: 2rem; margin-bottom: 6px; }
+    .header p { color: rgba(255,255,255,0.7); font-size: 0.9rem; }
+    .nav { background: #34495e; display: flex; justify-content: center; gap: 0; border-bottom: 3px solid #2980b9; }
+    .nav a { padding: 12px 22px; color: rgba(255,255,255,0.85); text-decoration: none; font-size: 0.85rem; font-weight: 600; }
+    .nav a:hover { background: rgba(255,255,255,0.1); color: #fff; }
+    .content { max-width: 800px; margin: 32px auto; padding: 0 24px; }
+    .card { background: #fff; border: 1px solid #dce1e8; border-left: 4px solid #2980b9; border-radius: 6px; padding: 24px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .card h2 { font-size: 1.2rem; margin-bottom: 12px; color: #2c3e50; }
+    .card h3 { font-size: 1rem; margin: 16px 0 8px; color: #1a5276; }
+    .dl-btn { display: inline-block; padding: 12px 24px; margin: 8px 8px 8px 0; border-radius: 6px; background: #2980b9; color: #fff; text-decoration: none; font-weight: 600; font-size: 0.9rem; transition: background 120ms; }
+    .dl-btn:hover { background: #1a5276; }
+    .dl-btn.mac { background: #34495e; }
+    .dl-btn.mac:hover { background: #2c3e50; }
+    ul { margin: 8px 0 8px 20px; }
+    li { margin: 4px 0; line-height: 1.6; }
+    code { background: #f0f4f8; padding: 2px 6px; border-radius: 3px; font-size: 0.85em; }
+    pre { background: #1e272e; color: #a8d8c8; padding: 14px; border-radius: 6px; overflow-x: auto; font-size: 0.82rem; margin: 10px 0; }
+    .version { display: inline-block; background: rgba(41,128,185,0.1); border: 1px solid #2980b9; border-radius: 999px; padding: 3px 12px; font-size: 0.75rem; font-weight: 600; color: #2980b9; margin-left: 10px; }
+    .footer { text-align: center; padding: 32px; color: #5a6c7d; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>SonarSniffer</h1>
+    <p>Professional Sidescan Sonar Processing & Mosaic Engine — NautiDog Sailing</p>
+  </div>
+  <nav class="nav">
+    <a href="https://cesarops.com">About</a>
+    <a href="#">SonarSniffer</a>
+    <a href="https://github.com/festeraeb/gl-wrecks-api">Wreck Database</a>
+    <a href="https://github.com/festeraeb/SonarSniffer">Source</a>
+    <a href="mailto:cesarops@cesarops.com">Contact</a>
+  </nav>
+
+  <div class="content">
+    <div class="card">
+      <h2>Download <span class="version">v0.77.5</span></h2>
+      <p>Pre-built CLI binaries for Windows and macOS. Includes <code>sonarsniffer-cli</code> (full pipeline) and <code>parse_cli</code> (quick file inspector).</p>
+      <br>
+      <a class="dl-btn" href="https://github.com/festeraeb/SonarSniffer/releases/latest/download/SonarSniffer-Windows-x64.zip">⬇ Windows x64</a>
+      <a class="dl-btn mac" href="https://github.com/festeraeb/SonarSniffer/releases/latest/download/SonarSniffer-macOS-x64.zip">⬇ macOS x64</a>
+    </div>
+
+    <div class="card">
+      <h2>Installation</h2>
+
+      <h3>Windows</h3>
+      <ul>
+        <li>Extract the ZIP to a folder (e.g. <code>C:\SonarSniffer\</code>)</li>
+        <li>Install <strong>GStreamer MSVC 64-bit runtime</strong> from <a href="https://gstreamer.freedesktop.org/download/">gstreamer.freedesktop.org</a> (required for video export)</li>
+        <li>Add <code>C:\gstreamer\1.0\msvc_x86_64\bin</code> to your system PATH</li>
+        <li>Open a terminal in the SonarSniffer folder and run commands below</li>
+      </ul>
+
+      <h3>macOS</h3>
+      <ul>
+        <li>Extract: <code>unzip SonarSniffer-macOS-x64.zip -d ~/SonarSniffer</code></li>
+        <li>Install GStreamer: <code>brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad</code></li>
+        <li>Make executable: <code>chmod +x ~/SonarSniffer/sonarsniffer-cli ~/SonarSniffer/parse_cli</code></li>
+        <li>First run: System Settings → Privacy & Security → Allow</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Usage</h2>
+
+      <h3>Quick parse (inspect file)</h3>
+      <pre>parse_cli /path/to/file.RSD</pre>
+
+      <h3>Full pipeline (mosaic + video + all outputs)</h3>
+      <pre>sonarsniffer-cli /path/to/file.RSD --video --mosaic --curvelet --colormap amber</pre>
+
+      <h3>Available colormaps</h3>
+      <p><code>amber</code> · <code>sonar</code> · <code>viridis</code> · <code>magma</code> · <code>inferno</code> · <code>plasma</code> · <code>ocean</code> · <code>iron</code> · <code>jet</code> · <code>grayscale</code></p>
+
+      <h3>All options</h3>
+      <pre>sonarsniffer-cli &lt;INPUT&gt; [OPTIONS]
+
+  --video           Export enhanced GStreamer video
+  --mosaic          Generate geo-referenced mosaic PNGs
+  --curvelet        Apply curvelet denoising
+  --soundtiles      Run SoundTiles feature alignment
+  --colormap &lt;name&gt; Colormap for rendering
+  --output &lt;dir&gt;    Override output directory
+  --kml             Export KML ground overlay
+  --kmz             Export KMZ package
+  --mbtiles         Export MBTiles tileset
+  --arcgis          Export ArcGIS-compatible GeoTIFF</pre>
+    </div>
+
+    <div class="card">
+      <h2>Supported Formats</h2>
+      <ul>
+        <li><strong>Garmin RSD</strong> — GT54, GT56, UHD, UHD2, Classic, LiveScope</li>
+        <li><strong>Lowrance SL2/SL3</strong> — Primary, Downscan, Sidescan</li>
+        <li><strong>Humminbird DAT</strong> — Side imaging, down imaging</li>
+        <li><strong>XTF</strong> — Extended Triton Format (survey-grade)</li>
+        <li><strong>JSF</strong> — EdgeTech JSF format</li>
+        <li><strong>Cerulean</strong> — Cerulean Sonar logs</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">
+    <p>CESAROps · NautiDog Sailing · <a href="https://cesarops.com">cesarops.com</a></p>
+  </div>
+</body>
+</html>
