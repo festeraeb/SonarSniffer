@@ -30,6 +30,7 @@ pub mod license;
 
 mod video;
 mod video_enhanced;
+mod mp4_av1;
 mod corpus_scan;
 pub mod deps;
 mod static_server;

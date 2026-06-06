@@ -44,6 +44,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Bundled full-precision FDCT — internal nauticuvs-full only (never crates.io).
 nauticuvs = { path = "./nauticuvs", package = "nauticuvs-full" }
 
+# Pure-Rust AV1 video encoder (no system libs, no pkg-config, no NASM).
+# default-features=false disables the `asm` feature so the build stays 100%
+# Rust on every CI runner. MP4 muxing is hand-written in src/mp4_av1.rs.
+rav1e = { version = "0.7", default-features = false }
+
 # MBTiles output
 mbtiles = "0.15"
 

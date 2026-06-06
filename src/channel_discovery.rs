@@ -1239,7 +1239,31 @@ fn correlate_port_starboard(
     let candidates: Vec<&ChannelProfile> = profiles
         .iter()
         .filter(|p| {
-            p.archetype == SignalArchetype::SideVu && p.ping_count >= MIN_PINGS_FOR_CLASSIFY
+            // Must be classified as SideVü with sufficient pings.
+            if p.archetype != SignalArchetype::SideVu || p.ping_count < MIN_PINGS_FOR_CLASSIFY {
+                return false;
+            }
+            // HARD EXCLUSION: known downscan and depth/temp channel IDs are NEVER
+            // valid sidescan pairing candidates, regardless of what the archetype
+            // classifier decided. The channel ID is the strongest signal — Garmin
+            // does not reuse these IDs for sidescan across any firmware generation.
+            match p.channel_id {
+                2 | 6 | 10 | 12 | 16 | 18 | 20 | 993 | 1487 => {
+                    log.push(format!(
+                        "  Port/Star: excluding ch{} (known downscan ID) from pairing",
+                        p.channel_id
+                    ));
+                    false
+                }
+                7 | 11 | 13 | 17 => {
+                    log.push(format!(
+                        "  Port/Star: excluding ch{} (depth/temp ID) from pairing",
+                        p.channel_id
+                    ));
+                    false
+                }
+                _ => true,
+            }
         })
         .collect();
 
