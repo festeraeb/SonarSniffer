@@ -293,27 +293,18 @@ pub fn build_mosaic(
                 1.0
             };
 
+            // Arc-aware trapezoid: leading edge uses heading_a, trailing uses heading_b.
+            // Cross-track position bilinearly interpolates between the two edge headings
+            // so adjacent ping-pairs share exact corners at the junction ping.
+            let (cos_a0, sin_a0) = cross_track_unit(heading_a, angle_offset);
+            let (cos_b1, sin_b1) = cross_track_unit(heading_b, angle_offset);
+
             for ts in 0..=track_steps {
                 let t = ts as f64 / track_steps as f64;
 
-                // Interpolate position along track
-                let cx = ax + (bx - ax) * t;
-                let cy = ay + (by - ay) * t;
-
-                // Interpolate heading
-                let heading = lerp_heading(heading_a, heading_b, t);
                 let depth = depth_a + (depth_b - depth_a) * t;
                 let swath = swath_a + (swath_b - swath_a) * t;
                 let sigma = sigma_a + (sigma_b - sigma_a) * t;
-
-                // Perpendicular vector
-                let true_angle = heading + angle_offset;
-                let math_rad = (90.0 - true_angle).to_radians();
-                let cos_a = math_rad.cos();
-                let sin_a = math_rad.sin();
-
-                // Sample count for cross-track stepping
-                let _n_interp = n_a + ((n_b as f64 - n_a as f64) * t) as usize;
                 let swath_proj = swath * center_scale;
 
                 // Number of cross-track steps
@@ -367,13 +358,22 @@ pub fn build_mosaic(
                         1.0
                     };
 
-                    let final_weight = gauss_weight * edge_weight;
+                    // Skip heavily feathered edge samples; compositing uses nadir distance, not blend.
+                    if gauss_weight * edge_weight < 0.05 {
+                        continue;
+                    }
 
+                    // Bilinear ground position: lerp cross-track at each edge, then lerp along track.
                     let proj_m = ground_m * center_scale;
-                    let px = cx + proj_m * cos_a;
-                    let py = cy + proj_m * sin_a;
+                    let px0 = ax + proj_m * cos_a0;
+                    let py0 = ay + proj_m * sin_a0;
+                    let px1 = bx + proj_m * cos_b1;
+                    let py1 = by + proj_m * sin_b1;
+                    let px = px0 * (1.0 - t) + px1 * t;
+                    let py = py0 * (1.0 - t) + py1 * t;
 
-                    grid.add_weighted_sample(px, py, normalized, final_weight);
+                    // Closest-to-nadir wins when passes cross (spec item #3).
+                    grid.add_nadir_sample(px, py, normalized, ground_m as f32);
                 }
             }
         }
@@ -549,6 +549,13 @@ fn compute_swath_m(sample_count: usize, depth_m: f64, nadir_gap: usize, config: 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §7  HEADING INTERPOLATION
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/// Unit vector for cross-track projection in Web Mercator metres.
+fn cross_track_unit(heading_deg: f64, angle_offset_deg: f64) -> (f64, f64) {
+    let true_angle = heading_deg + angle_offset_deg;
+    let math_rad = (90.0 - true_angle).to_radians();
+    (math_rad.cos(), math_rad.sin())
+}
 
 /// Linearly interpolate between two headings, handling the 0°/360° wrap.
 fn lerp_heading(a: f64, b: f64, t: f64) -> f64 {
@@ -1086,6 +1093,52 @@ mod tests {
         // ground = sqrt(10² - 3²) = sqrt(91) ≈ 9.54m
         let swath = compute_swath_m(1000, 3.0, 0, &config);
         assert!(swath > 9.0 && swath < 10.0, "Swath should be ~9.5m, got {swath:.2}");
+    }
+
+    #[test]
+    fn test_arc_trapezoid_junction_shared() {
+        // Ping B is the junction between pairs AB and BC. At t=1 on AB and t=0 on BC,
+        // bilinear projection must land on the same metre coordinates.
+        let heading_a = 0.0;
+        let heading_b = 45.0;
+        let heading_c = 90.0;
+        let angle_offset = -90.0; // port
+        let (ax, ay) = (0.0, 0.0);
+        let (bx, by) = (10.0, 0.0);
+        let (cx, cy) = (10.0, 10.0);
+        let ground_m = 5.0;
+
+        let (cos_a0, sin_a0) = cross_track_unit(heading_a, angle_offset);
+        let (cos_b1, sin_b1) = cross_track_unit(heading_b, angle_offset);
+        let (cos_b0, sin_b0) = cross_track_unit(heading_b, angle_offset);
+        let (cos_c1, sin_c1) = cross_track_unit(heading_c, angle_offset);
+
+        // AB at t=1
+        let px_ab = (ax + ground_m * cos_a0) * 0.0 + (bx + ground_m * cos_b1) * 1.0;
+        let py_ab = (ay + ground_m * sin_a0) * 0.0 + (by + ground_m * sin_b1) * 1.0;
+
+        // BC at t=0
+        let px_bc = (bx + ground_m * cos_b0) * 1.0 + (cx + ground_m * cos_c1) * 0.0;
+        let py_bc = (by + ground_m * sin_b0) * 1.0 + (cy + ground_m * sin_c1) * 0.0;
+
+        assert!(
+            (px_ab - px_bc).abs() < 1e-9 && (py_ab - py_bc).abs() < 1e-9,
+            "junction mismatch: AB=({px_ab},{py_ab}) BC=({px_bc},{py_bc})"
+        );
+    }
+
+    #[test]
+    fn test_nadir_priority_compositing() {
+        use crate::mosaic::grid::MosaicGrid;
+        let grid = MosaicGrid::new(0.0, 0.0, 1.0, 1.0, 0.5);
+        // Far-from-nadir sample first
+        grid.add_nadir_sample(0.25, 0.25, 100.0, 20.0);
+        // Closer-to-nadir should replace
+        grid.add_nadir_sample(0.25, 0.25, 50.0, 5.0);
+        assert!((grid.get_normalized_pixel(0, 0) - 50.0).abs() < 0.01);
+        // Worse nadir distance should not overwrite
+        grid.add_nadir_sample(0.25, 0.25, 200.0, 15.0);
+        assert!((grid.get_normalized_pixel(0, 0) - 50.0).abs() < 0.01);
     }
 
     #[test]

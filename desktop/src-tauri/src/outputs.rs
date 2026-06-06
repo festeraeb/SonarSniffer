@@ -1081,7 +1081,11 @@ fn segment_by_heading(pings: &[&Ping], base_size: usize, max_heading_rad: f64) -
             }
         }
         segments.push((seg_start, split_at));
-        seg_start = split_at;
+        if split_at >= n {
+            break;
+        }
+        // Overlap by one ping so tile N trailing edge = tile N+1 leading edge.
+        seg_start = split_at.saturating_sub(1);
     }
     segments
 }
@@ -2147,39 +2151,41 @@ fn compute_shared_boundaries(
         seg_swath_half_m.get(i).copied().unwrap_or(30.0).clamp(10.0, 300.0)
     };
 
-    // First boundary: first ping of first segment, heading at start
-    let first_ping = segments[0].first().unwrap();
-    let h_start = local_heading(segments[0], false);
-    boundaries.push(perp_corners(first_ping.latitude, first_ping.longitude, h_start, seg_half(0)));
-
-    // Interior boundaries: between segment i-1 and segment i
-    for i in 1..n {
-        let prev_last = segments[i - 1].last().unwrap();
-        let next_first = segments[i].first().unwrap();
-        let mid_lat = (prev_last.latitude + next_first.latitude) / 2.0;
-        let mid_lon = (prev_last.longitude + next_first.longitude) / 2.0;
-        // Use local headings at the boundary points (not overall segment heading)
-        let h_prev_end = local_heading(segments[i - 1], true);
-        let h_next_start = local_heading(segments[i], false);
-        let heading = avg_heading(h_prev_end, h_next_start);
-        let mut turn_delta = (h_next_start - h_prev_end).abs();
-        if turn_delta > std::f64::consts::PI {
-            turn_delta = 2.0 * std::f64::consts::PI - turn_delta;
-        }
-        // Tight turns can self-intersect with full swath; taper width at boundaries.
-        // Gentle tapering at turns prevents corner overlap without creating
-        // large gaps.  A 90° turn renders at ~65% width.
-        let turn_norm = (turn_delta / std::f64::consts::PI).clamp(0.0, 1.0);
-        let base_half = (seg_half(i - 1) + seg_half(i)) * 0.5;
-        // Stronger taper to prevent sharp corners crossing over in Google Earth & MapLibre
-        let local_half = base_half * (1.0 - 0.85 * turn_norm).clamp(0.15, 1.0);
-        boundaries.push(perp_corners(mid_lat, mid_lon, heading, local_half));
+    // Arc-aware boundaries: leading edge uses heading_start, trailing uses heading_end.
+    // boundaries[i] is shared by segment i-1 (trailing) and segment i (leading).
+    for i in 0..=n {
+        let (ping, heading, half_m) = if i == 0 {
+            let seg = segments[0];
+            (
+                seg.first().unwrap(),
+                local_heading(seg, false),
+                seg_half(0),
+            )
+        } else if i == n {
+            let seg = segments[n - 1];
+            (
+                seg.last().unwrap(),
+                local_heading(seg, true),
+                seg_half(n - 1),
+            )
+        } else {
+            // Junction ping (segments overlap by one ping from segment_by_heading).
+            let ping = segments[i].first().unwrap();
+            let h_end = local_heading(segments[i - 1], true);
+            let h_start = local_heading(segments[i], false);
+            (
+                ping,
+                avg_heading(h_end, h_start),
+                (seg_half(i - 1) + seg_half(i)) * 0.5,
+            )
+        };
+        boundaries.push(perp_corners(
+            ping.latitude,
+            ping.longitude,
+            heading,
+            half_m,
+        ));
     }
-
-    // Last boundary: last ping of last segment, heading at end
-    let last_ping = segments[n - 1].last().unwrap();
-    let h_end = local_heading(segments[n - 1], true);
-    boundaries.push(perp_corners(last_ping.latitude, last_ping.longitude, h_end, seg_half(n - 1)));
 
     boundaries
 }

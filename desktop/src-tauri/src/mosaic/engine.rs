@@ -293,27 +293,16 @@ pub fn build_mosaic(
                 1.0
             };
 
+            // Arc-aware trapezoid: leading edge uses heading_a, trailing uses heading_b.
+            let (cos_a0, sin_a0) = cross_track_unit(heading_a, angle_offset);
+            let (cos_b1, sin_b1) = cross_track_unit(heading_b, angle_offset);
+
             for ts in 0..=track_steps {
                 let t = ts as f64 / track_steps as f64;
 
-                // Interpolate position along track
-                let cx = ax + (bx - ax) * t;
-                let cy = ay + (by - ay) * t;
-
-                // Interpolate heading
-                let heading = lerp_heading(heading_a, heading_b, t);
                 let depth = depth_a + (depth_b - depth_a) * t;
                 let swath = swath_a + (swath_b - swath_a) * t;
                 let sigma = sigma_a + (sigma_b - sigma_a) * t;
-
-                // Perpendicular vector
-                let true_angle = heading + angle_offset;
-                let math_rad = (90.0 - true_angle).to_radians();
-                let cos_a = math_rad.cos();
-                let sin_a = math_rad.sin();
-
-                // Sample count for cross-track stepping
-                let n_interp = n_a + ((n_b as f64 - n_a as f64) * t) as usize;
                 let swath_proj = swath * center_scale;
 
                 // Number of cross-track steps
@@ -370,8 +359,12 @@ pub fn build_mosaic(
                     let final_weight = gauss_weight * edge_weight;
 
                     let proj_m = ground_m * center_scale;
-                    let px = cx + proj_m * cos_a;
-                    let py = cy + proj_m * sin_a;
+                    let px0 = ax + proj_m * cos_a0;
+                    let py0 = ay + proj_m * sin_a0;
+                    let px1 = bx + proj_m * cos_b1;
+                    let py1 = by + proj_m * sin_b1;
+                    let px = px0 * (1.0 - t) + px1 * t;
+                    let py = py0 * (1.0 - t) + py1 * t;
 
                     grid.add_weighted_sample(px, py, normalized, final_weight);
                 }
@@ -549,6 +542,13 @@ fn compute_swath_m(sample_count: usize, depth_m: f64, nadir_gap: usize, config: 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §7  HEADING INTERPOLATION
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/// Unit vector for cross-track projection in Web Mercator metres.
+fn cross_track_unit(heading_deg: f64, angle_offset_deg: f64) -> (f64, f64) {
+    let true_angle = heading_deg + angle_offset_deg;
+    let math_rad = (90.0 - true_angle).to_radians();
+    (math_rad.cos(), math_rad.sin())
+}
 
 /// Linearly interpolate between two headings, handling the 0°/360° wrap.
 fn lerp_heading(a: f64, b: f64, t: f64) -> f64 {

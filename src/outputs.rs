@@ -1355,7 +1355,11 @@ fn segment_by_heading(
             }
         }
         segments.push((seg_start, split_at));
-        seg_start = split_at;
+        if split_at >= n {
+            break;
+        }
+        // Overlap by one ping so tile N trailing edge = tile N+1 leading edge.
+        seg_start = split_at.saturating_sub(1);
     }
     segments
 }
@@ -2552,6 +2556,12 @@ fn avg_heading(h1: f64, h2: f64) -> f64 {
     sx.atan2(cx)
 }
 
+/// Absolute angular difference between two headings (radians), 0..π.
+fn heading_diff(h1: f64, h2: f64) -> f64 {
+    let d = (h1 - h2).abs() % std::f64::consts::TAU;
+    if d > std::f64::consts::PI { std::f64::consts::TAU - d } else { d }.to_degrees()
+}
+
 /// Compute heading (radians) from ping a to ping b.
 /// Corrects for longitude convergence at latitude so heading is consistent
 /// with the perp_corners() metre-space projection.
@@ -2563,6 +2573,99 @@ fn heading_between(a: &Ping, b: &Ping) -> f64 {
     let delta_lat = b.latitude - a.latitude;
     let delta_lon = (b.longitude - a.longitude) * a.latitude.to_radians().cos();
     delta_lon.atan2(delta_lat)
+}
+
+/// Approximate metres between two lat/lon points (adequate for segment overlap scoring).
+fn geo_dist_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let m_per_deg_lat = 111_320.0;
+    let m_per_deg_lon = 111_320.0 * lat1.to_radians().cos().max(0.01);
+    let dy = (lat2 - lat1) * m_per_deg_lat;
+    let dx = (lon2 - lon1) * m_per_deg_lon;
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// Minimum distance from a point to a polyline defined by GPS pings.
+fn point_to_track_dist_m(lat: f64, lon: f64, pings: &[&Ping]) -> f64 {
+    if pings.is_empty() {
+        return f64::MAX;
+    }
+    if pings.len() == 1 {
+        let p = pings[0];
+        return geo_dist_m(lat, lon, p.latitude, p.longitude);
+    }
+    let mut best = f64::MAX;
+    for pair in pings.windows(2) {
+        let a = pair[0];
+        let b = pair[1];
+        let ax = a.latitude;
+        let ay = a.longitude;
+        let bx = b.latitude;
+        let by = b.longitude;
+        let dx = bx - ax;
+        let dy = by - ay;
+        let len_sq = dx * dx + dy * dy;
+        let t = if len_sq > 0.0 {
+            ((lat - ax) * dx + (lon - ay) * dy) / len_sq
+        } else {
+            0.0
+        }
+        .clamp(0.0, 1.0);
+        let px = ax + t * dx;
+        let py = ay + t * dy;
+        best = best.min(geo_dist_m(lat, lon, px, py));
+    }
+    best
+}
+
+fn quad_bbox(corners: &[(f64, f64); 4]) -> (f64, f64, f64, f64) {
+    let mut min_lon = f64::MAX;
+    let mut max_lon = f64::MIN;
+    let mut min_lat = f64::MAX;
+    let mut max_lat = f64::MIN;
+    for &(lon, lat) in corners {
+        min_lon = min_lon.min(lon);
+        max_lon = max_lon.max(lon);
+        min_lat = min_lat.min(lat);
+        max_lat = max_lat.max(lat);
+    }
+    (min_lon, min_lat, max_lon, max_lat)
+}
+
+fn quads_overlap(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> bool {
+    let (a_w, a_s, a_e, a_n) = quad_bbox(a);
+    let (b_w, b_s, b_e, b_n) = quad_bbox(b);
+    a_w <= b_e && a_e >= b_w && a_s <= b_n && a_n >= b_s
+}
+
+fn overlap_center(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> (f64, f64) {
+    let (a_w, a_s, a_e, a_n) = quad_bbox(a);
+    let (b_w, b_s, b_e, b_n) = quad_bbox(b);
+    let lon = ((a_w.max(b_w) + a_e.min(b_e)) * 0.5).clamp(-180.0, 180.0);
+    let lat = ((a_s.max(b_s) + a_n.min(b_n)) * 0.5).clamp(-90.0, 90.0);
+    (lat, lon)
+}
+
+/// Higher drawOrder = rendered on top in Google Earth. Segments whose track is
+/// closer to an overlap region beat segments from a crossing pass (spec item #3).
+fn compute_kmz_draw_orders(guide_segments: &[&[&Ping]], corners: &[[(f64, f64); 4]]) -> Vec<i32> {
+    let n = corners.len();
+    let mut orders = vec![0i32; n];
+    for i in 0..n {
+        let mut score = i as i32;
+        for j in 0..n {
+            if i == j || !quads_overlap(&corners[i], &corners[j]) {
+                continue;
+            }
+            let (lat, lon) = overlap_center(&corners[i], &corners[j]);
+            let d_i = point_to_track_dist_m(lat, lon, guide_segments[i]);
+            let d_j = point_to_track_dist_m(lat, lon, guide_segments[j]);
+            if d_i + 0.5 < d_j {
+                score += 1000;
+            }
+        }
+        orders[i] = score;
+    }
+    orders
 }
 
 /// Pre-compute shared boundary corners for a sequence of segments.
@@ -2582,23 +2685,40 @@ fn compute_shared_boundaries(
     let n = segments.len();
     let mut boundaries = Vec::with_capacity(n + 1);
 
-    // Helper: compute heading at a specific ping using its neighbors
+    // Helper: compute heading at a specific ping using its neighbors.
+    // Adaptive baseline: shorter in turns for tighter curve-following,
+    // longer on straight runs for stability.
     let local_heading = |seg: &[&Ping], end: bool| -> f64 {
         let len = seg.len();
         if len < 2 {
             return 0.0;
         }
-        let span = (len / 4).clamp(10, 40);
-        if end {
-            // Heading at the end of the segment: use a broader baseline for stability
-            let a = seg[len.saturating_sub(span + 1)];
-            let b = seg[len - 1];
-            heading_between(a, b)
+        // Start with a broad baseline for stability
+        let broad_span = (len / 4).clamp(10, 40);
+        // Also compute a tight baseline (3-5 pings) for turn detection
+        let tight_span = 3usize.min(len - 1);
+
+        let (broad_h, tight_h) = if end {
+            let ba = seg[len.saturating_sub(broad_span + 1)];
+            let bb = seg[len - 1];
+            let ta = seg[len.saturating_sub(tight_span + 1)];
+            let tb = seg[len - 1];
+            (heading_between(ba, bb), heading_between(ta, tb))
         } else {
-            // Heading at the start of the segment: use a broader baseline for stability
-            let a = seg[0];
-            let b = seg[span.min(len - 1)];
-            heading_between(a, b)
+            let ba = seg[0];
+            let bb = seg[broad_span.min(len - 1)];
+            let ta = seg[0];
+            let tb = seg[tight_span.min(len - 1)];
+            (heading_between(ba, bb), heading_between(ta, tb))
+        };
+
+        // If broad and tight disagree by more than 5°, we're in a turn —
+        // use the tight (local) heading for accurate edge placement.
+        let diff = heading_diff(broad_h, tight_h);
+        if diff > 5.0 {
+            tight_h
+        } else {
+            broad_h
         }
     };
 
@@ -2610,49 +2730,41 @@ fn compute_shared_boundaries(
             .clamp(10.0, 300.0)
     };
 
-    // First boundary: first ping of first segment, heading at start
-    let first_ping = segments[0].first().unwrap();
-    let h_start = local_heading(segments[0], false);
-    boundaries.push(perp_corners(
-        first_ping.latitude,
-        first_ping.longitude,
-        h_start,
-        seg_half(0),
-    ));
-
-    // Interior boundaries: between segment i-1 and segment i
-    for i in 1..n {
-        let prev_last = segments[i - 1].last().unwrap();
-        let next_first = segments[i].first().unwrap();
-        let mid_lat = (prev_last.latitude + next_first.latitude) / 2.0;
-        let mid_lon = (prev_last.longitude + next_first.longitude) / 2.0;
-        // Use local headings at the boundary points (not overall segment heading)
-        let h_prev_end = local_heading(segments[i - 1], true);
-        let h_next_start = local_heading(segments[i], false);
-        let heading = avg_heading(h_prev_end, h_next_start);
-        let mut turn_delta = (h_next_start - h_prev_end).abs();
-        if turn_delta > std::f64::consts::PI {
-            turn_delta = 2.0 * std::f64::consts::PI - turn_delta;
-        }
-        // Tight turns can self-intersect with full swath; taper width at boundaries.
-        // Gentle tapering at turns prevents corner overlap without creating
-        // large gaps.  A 90° turn renders at ~65% width.
-        let turn_norm = (turn_delta / std::f64::consts::PI).clamp(0.0, 1.0);
-        let base_half = (seg_half(i - 1) + seg_half(i)) * 0.5;
-        // Stronger taper to prevent sharp corners crossing over in Google Earth & MapLibre
-        let local_half = base_half * (1.0 - 0.85 * turn_norm).clamp(0.15, 1.0);
-        boundaries.push(perp_corners(mid_lat, mid_lon, heading, local_half));
+    // Arc-aware boundaries: leading edge uses heading_start, trailing uses heading_end.
+    // boundaries[i] is shared by segment i-1 (trailing) and segment i (leading).
+    for i in 0..=n {
+        let (ping, heading, half_m) = if i == 0 {
+            let seg = segments[0];
+            (
+                seg.first().unwrap(),
+                local_heading(seg, false),
+                seg_half(0),
+            )
+        } else if i == n {
+            let seg = segments[n - 1];
+            (
+                seg.last().unwrap(),
+                local_heading(seg, true),
+                seg_half(n - 1),
+            )
+        } else {
+            // Junction ping (segments overlap by one ping from segment_by_heading).
+            let ping = segments[i].first().unwrap();
+            let h_end = local_heading(segments[i - 1], true);
+            let h_start = local_heading(segments[i], false);
+            (
+                ping,
+                avg_heading(h_end, h_start),
+                (seg_half(i - 1) + seg_half(i)) * 0.5,
+            )
+        };
+        boundaries.push(perp_corners(
+            ping.latitude,
+            ping.longitude,
+            heading,
+            half_m,
+        ));
     }
-
-    // Last boundary: last ping of last segment, heading at end
-    let last_ping = segments[n - 1].last().unwrap();
-    let h_end = local_heading(segments[n - 1], true);
-    boundaries.push(perp_corners(
-        last_ping.latitude,
-        last_ping.longitude,
-        h_end,
-        seg_half(n - 1),
-    ));
 
     boundaries
 }
@@ -3465,6 +3577,7 @@ fn write_mbtiles(
 
                 let mut tile: image::RgbaImage =
                     ImageBuffer::from_pixel(256, 256, Rgba([0u8, 0, 0, 0]));
+                let mut tile_quality = [[f64::MAX; 256]; 256];
                 let mut has_data = false;
 
                 for (pi, ping) in gps_pings.iter().enumerate() {
@@ -3486,40 +3599,28 @@ fn write_mbtiles(
                     let cx = (ping.longitude - tile_west) / (tile_east - tile_west) * 256.0;
                     let cy = (tile_north - ping.latitude) / (tile_north - tile_south) * 256.0;
 
-                    // Along-track direction in pixel space (for brush coverage)
-                    let along_sin = heading.sin();
-                    let along_cos = heading.cos();
-                    let along_px_x = along_sin * (m_per_deg_lon / m_per_px.max(0.001)) * 0.0000001;
-                    let along_px_y = -along_cos * (m_per_deg_lat / m_per_px.max(0.001)) * 0.0000001;
-
                     let row = &ping_rows[pi];
                     for (si, &g) in row.iter().enumerate() {
                         if g == 0 {
                             continue;
                         }
-                        let dist_from_center = (si as f64 - swath_px as f64 / 2.0) * m_per_sample;
-                        let px = cx + dist_from_center * sin_p / m_per_px;
-                        let py = cy - dist_from_center * cos_p / m_per_px;
+                        let cross_track_m =
+                            (si as f64 - swath_px as f64 / 2.0).abs() * m_per_sample;
+                        let px = cx + (si as f64 - swath_px as f64 / 2.0) * m_per_sample * sin_p / m_per_px;
+                        let py = cy - (si as f64 - swath_px as f64 / 2.0) * m_per_sample * cos_p / m_per_px;
 
                         let rgb = apply_colormap(g as f32 / 255.0, colormap);
                         let pixel = Rgba([rgb[0], rgb[1], rgb[2], 255]);
 
-                        // Paint a small 2×1 brush to reduce gaps between pings.
-                        // Brush extends 1px in the along-track direction.
-                        for ofs in 0..2i32 {
-                            let bx = (px + along_px_x * ofs as f64).round() as i32;
-                            let by = (py + along_px_y * ofs as f64).round() as i32;
-                            if bx >= 0 && bx < 256 && by >= 0 && by < 256 {
-                                // Max-compositing: brighter pixel wins
-                                let existing = tile.get_pixel(bx as u32, by as u32);
-                                if existing[3] == 0
-                                    || g > ((existing[0] as u16
-                                        + existing[1] as u16
-                                        + existing[2] as u16)
-                                        / 3) as u8
-                                {
-                                    tile.put_pixel(bx as u32, by as u32, pixel);
-                                }
+                        let bx = px.round() as i32;
+                        let by = py.round() as i32;
+                        if bx >= 0 && bx < 256 && by >= 0 && by < 256 {
+                            // Nadir-priority: closer to track center wins at crossings.
+                            let existing = tile.get_pixel(bx as u32, by as u32);
+                            let existing_dist = tile_quality[by as usize][bx as usize];
+                            if existing[3] == 0 || cross_track_m < existing_dist {
+                                tile.put_pixel(bx as u32, by as u32, pixel);
+                                tile_quality[by as usize][bx as usize] = cross_track_m;
                                 has_data = true;
                             }
                         }
@@ -3774,8 +3875,10 @@ fn write_kmz(
         strip: image::RgbImage,
         corners: [(f64, f64); 4],
         idx: usize,
+        draw_order: i32,
     }
     let mut segments: Vec<KmzSegment> = Vec::new();
+    let mut segment_guides: Vec<Vec<&Ping>> = Vec::new();
 
     // Build a mapping from guide-segment index ranges to the other channel's pings
     // by matching on timestamp proximity
@@ -3881,11 +3984,24 @@ fn write_kmz(
             strip,
             corners,
             idx: seg_idx,
+            draw_order: 0,
         });
+        segment_guides.push(seg_guide.iter().copied().collect());
     }
 
     if segments.is_empty() {
         return Ok(false);
+    }
+
+    let draw_orders = compute_kmz_draw_orders(
+        &segment_guides
+            .iter()
+            .map(|g| g.as_slice())
+            .collect::<Vec<_>>(),
+        &segments.iter().map(|s| s.corners).collect::<Vec<_>>(),
+    );
+    for (seg, order) in segments.iter_mut().zip(draw_orders) {
+        seg.draw_order = order;
     }
 
     // Along-track registration: satellite-style NCC on overlap bands between strips.
@@ -3921,7 +4037,7 @@ fn write_kmz(
                 \n    </gx:LatLonQuad>\
                 \n  </GroundOverlay>",
                 seg.idx,
-                seg.idx + 1,
+                seg.draw_order,
                 png_name,
                 seg.corners[0].0,
                 seg.corners[0].1,
@@ -3948,7 +4064,7 @@ fn write_kmz(
                 \n    </gx:LatLonQuad>\
                 \n  </GroundOverlay>",
                 seg.idx,
-                seg.idx + 1,
+                seg.draw_order,
                 webp_name,
                 seg.corners[0].0,
                 seg.corners[0].1,
