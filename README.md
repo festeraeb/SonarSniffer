@@ -22,22 +22,18 @@ SonarSniffer parses Garmin RSD, Lowrance SL2/SL3, Humminbird DAT, XTF, JSF, and 
 
 1. Download `SonarSniffer-Windows-x64.zip` from the link above
 2. Extract to a folder (e.g. `C:\SonarSniffer\`)
-3. **Install GStreamer** (required for video export):
-   - Download from https://gstreamer.freedesktop.org/download/
-   - Install the **MSVC 64-bit** runtime package
-   - Ensure `C:\gstreamer\1.0\msvc_x86_64\bin` is in your PATH
-4. Run `sonarsniffer-cli.exe` from the command line or use the Tauri desktop app
+3. Run `sonarsniffer-cli.exe` from the command line or use the Tauri desktop app
+
+Video export uses a built-in pure-Rust AV1 encoder — **no external dependencies required.**
 
 ### macOS
 
 1. Download `SonarSniffer-macOS-x64.zip` from the link above
 2. Extract: `unzip SonarSniffer-macOS-x64.zip -d ~/SonarSniffer`
-3. **Install GStreamer** (required for video export):
-   ```bash
-   brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
-   ```
-4. Make executable: `chmod +x ~/SonarSniffer/sonarsniffer-cli ~/SonarSniffer/parse_cli`
-5. On first run, macOS may block it — go to System Settings → Privacy & Security → Allow
+3. Make executable: `chmod +x ~/SonarSniffer/sonarsniffer-cli ~/SonarSniffer/parse_cli`
+4. On first run, macOS may block it — go to System Settings → Privacy & Security → Allow
+
+Video export uses a built-in pure-Rust AV1 encoder — **no external dependencies required.**
 
 ---
 

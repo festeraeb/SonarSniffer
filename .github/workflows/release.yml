@@ -11,13 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install GStreamer
-        run: |
-          choco install gstreamer gstreamer-devel --yes
-          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64" >> $env:GITHUB_ENV
-          echo "C:\gstreamer\1.0\msvc_x86_64\bin" >> $env:GITHUB_PATH
       - name: Build CLI binaries
-        run: cargo build --release --bin sonarsniffer-cli --bin parse_cli
+        run: cargo build --release --no-default-features --bin sonarsniffer-cli --bin parse_cli
       - name: Package
         run: |
           mkdir dist
@@ -35,11 +30,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install GStreamer
-        run: |
-          brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
       - name: Build CLI binaries
-        run: cargo build --release --bin sonarsniffer-cli --bin parse_cli
+        run: cargo build --release --no-default-features --bin sonarsniffer-cli --bin parse_cli
       - name: Package
         run: |
           mkdir dist
