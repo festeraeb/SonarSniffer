@@ -10,6 +10,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$nauticuvsToml = Join-Path $repoRoot "nauticuvs\Cargo.toml"
+if (-not (Test-Path $nauticuvsToml)) {
+    throw "missing vendored nauticuvs at $nauticuvsToml (must ship in-repo, not crates.io)"
+}
 $tauriDir = Join-Path $repoRoot "desktop\src-tauri"
 $binDir = Join-Path $tauriDir "binaries"
 $hostLine = (rustc -vV | Select-String "^host:").ToString() -replace "host:\s*", ""

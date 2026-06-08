@@ -28,6 +28,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify vendored nauticuvs (path dep, not crates.io)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path nauticuvs/Cargo.toml)) { throw "nauticuvs not bundled in repo" }
+          Select-String -Path desktop/src-tauri/Cargo.toml -Pattern 'path = "../../nauticuvs"' -Quiet
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0" --locked

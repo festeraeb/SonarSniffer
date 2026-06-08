@@ -4,6 +4,12 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_DIR="$REPO/desktop/src-tauri"
+
+# Bundled curvelet library — must exist in-repo (never crates.io).
+if [[ ! -f "$REPO/nauticuvs/Cargo.toml" ]]; then
+  echo "missing vendored nauticuvs at $REPO/nauticuvs" >&2
+  exit 1
+fi
 BIN_DIR="$TAURI_DIR/binaries"
 HOST="$(rustc -vV | awk '/^host: / {print $2}')"
 
