@@ -1725,7 +1725,7 @@ mod tests {
             median_peak_position: 0.6,
             energy_front_back_ratio: 0.8,
         };
-        let (archetype, _, _) = classify_archetype(60, 800, &spike, 5.5, 4);
+        let (archetype, _, _) = classify_archetype(60, 800, &spike, 5.5, 4, 0.0);
         assert_eq!(archetype, SignalArchetype::SideVu);
     }
 
@@ -1736,7 +1736,7 @@ mod tests {
             median_peak_position: 0.15,
             energy_front_back_ratio: 8.0,
         };
-        let (archetype, _, _) = classify_archetype(2, 150, &spike, 4.0, 6);
+        let (archetype, _, _) = classify_archetype(2, 150, &spike, 4.0, 6, 0.0);
         assert_eq!(archetype, SignalArchetype::DownVuClearVu);
     }
 }

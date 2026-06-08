@@ -3076,7 +3076,6 @@ checksum = "956787520e75e9bd233246045d19f42fb73242759cc57fba9611d940ae96d4b0"
 name = "nauticuvs-full"
 version = "0.1.2-internal"
 dependencies = [
- "clap",
  "ndarray 0.16.1",
  "ndarray-npy",
  "num-complex 0.4.6",

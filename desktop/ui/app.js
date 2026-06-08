@@ -138,31 +138,50 @@ async function refreshLicense() {
         ? "Private build: license prompts are disabled."
         : "Full license active.";
     } else if (status.state === "trial") {
-      summary = `Trial active: ${status.days_remaining} day(s) remaining.`;
+      const installed = status.first_installed ? ` (installed ${status.first_installed})` : "";
+      summary = `30-day trial: ${status.days_remaining} day(s) remaining${installed}.`;
     } else {
-      summary = "Trial expired. Enter a valid license key to unlock SonarSniffer.";
+      summary = "Trial expired. Enter your 20-digit license code to unlock SonarSniffer.";
     }
     setText("licenseSummary", summary);
-    setText("licenseContact", `For a full license key contact: ${status.contact_email}`);
-    setText("licenseMessage", status.private_build ? "This installer is pre-unlocked for internal use." : "Public key for current testing: 8106940539");
+    setText("licenseContact", `License support: ${status.contact_email}`);
+    setText(
+      "licenseMessage",
+      status.private_build
+        ? "This installer is pre-unlocked for internal use."
+        : status.state === "trial"
+          ? "Trial started on first launch. Video export uses built-in AV1 (rav1e)."
+          : ""
+    );
     const keyInput = document.getElementById("licenseKey");
     const activateButton = document.getElementById("activateLicenseBtn");
-    if (keyInput) keyInput.disabled = status.private_build;
-    if (activateButton) activateButton.disabled = status.private_build;
+    const unlocked = status.private_build || status.state === "unlocked";
+    if (keyInput) {
+      keyInput.disabled = unlocked;
+      if (unlocked) keyInput.value = "";
+    }
+    if (activateButton) activateButton.disabled = unlocked;
   } catch (error) {
     setText("licenseSummary", `License check failed: ${error}`);
   }
 }
 
 async function activateLicense() {
-  const key = document.getElementById("licenseKey")?.value?.trim();
+  const keyInput = document.getElementById("licenseKey");
+  const key = keyInput?.value?.trim();
   if (!key) {
-    setText("licenseMessage", "Enter a license key first.");
+    setText("licenseMessage", "Enter your 20-digit license code first.");
+    return;
+  }
+  const digits = key.replace(/\D/g, "");
+  if (digits.length !== 20) {
+    setText("licenseMessage", "License code must be exactly 20 digits.");
     return;
   }
   try {
     await invoke("activate_license", { key });
-    setText("licenseMessage", "License activated.");
+    if (keyInput) keyInput.value = "";
+    setText("licenseMessage", "License activated. Thank you.");
     await refreshLicense();
   } catch (error) {
     setText("licenseMessage", String(error));
@@ -188,6 +207,10 @@ async function browseFolder() {
 }
 
 async function runPipeline() {
+  if (state.license?.state === "expired") {
+    setConsole("pipelineOutput", `Trial expired. Enter a 20-digit license code or contact ${state.license.contact_email}.`);
+    return;
+  }
   if (!state.preflight?.ready) {
     setConsole("pipelineOutput", "Install required dependencies first (WebView2 on Windows).");
     return;

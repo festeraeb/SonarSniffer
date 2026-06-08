@@ -353,6 +353,12 @@ async fn run_sonar_pipeline(
     options: Option<PipelineOptions>,
     app: tauri::AppHandle,
 ) -> Result<PipelineResponse, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+    license::ensure_licensed(data_dir)?;
+
     let pre = deps::preflight_report();
     if !pre.ready {
         return Err(format!(

@@ -57,7 +57,7 @@
         <p id="licenseSummary" class="card-body">Checking license status...</p>
         <p id="licenseContact" class="muted small"></p>
         <div class="field-row tight">
-          <input id="licenseKey" type="text" placeholder="Enter license key">
+          <input id="licenseKey" type="text" placeholder="20-digit license code" autocomplete="off">
           <button id="activateLicenseBtn" class="btn">Activate</button>
         </div>
         <p id="licenseMessage" class="muted small"></p>
@@ -81,7 +81,7 @@
     <section class="card full" id="section-pipeline">
       <div class="card-header">
         <h3>Run SonarSniffer Pipeline</h3>
-        <span class="muted small">Video export uses built-in AV1 (no extra deps)</span>
+        <span class="muted small">Video export: pure-Rust AV1 via rav1e (no GStreamer required)</span>
       </div>
 
       <div class="form-grid">

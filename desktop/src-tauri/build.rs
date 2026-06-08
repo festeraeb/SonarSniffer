@@ -5,7 +5,7 @@ fn main() {
     let private_build =
         std::env::var("SONARSNIFFER_PRIVATE_BUILD").unwrap_or_else(|_| "0".to_string());
     let license_email = std::env::var("SONARSNIFFER_LICENSE_EMAIL")
-        .unwrap_or_else(|_| "support@nautidogsailing.com".to_string());
+        .unwrap_or_else(|_| "nautik9@cesarops.com".to_string());
 
     println!("cargo:rustc-env=SONARSNIFFER_PRIVATE_BUILD={private_build}");
     println!("cargo:rustc-env=SONARSNIFFER_LICENSE_EMAIL={license_email}");

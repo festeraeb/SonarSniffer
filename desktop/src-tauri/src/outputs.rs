@@ -201,15 +201,21 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
 
     let mut artifacts = Vec::new();
 
+    // Discovery + EGN cache: shared by mosaic, KMZ, viewer, and geographic engine.
+    let discovery = crate::channel_discovery::discover_and_profile(parsed);
+    let egn_cache = build_egn_channel_cache(parsed);
+    let sidescan_pair = resolve_sidescan_pair(parsed, &discovery);
+
     // ── Pre-compute expensive results shared by multiple output writers ──
     // The sigma filter takes 4-7s per channel; compute once when both
-    // waterfall + mosaic need denoised images from the same gray data.
+    // waterfall + mosaic need denoised images from the same EGN-enhanced gray data.
     let denoised_cache: BTreeMap<u32, GrayImage> = if options.waterfall && options.mosaic && options.curvelet_denoise {
         if let Some(a) = &app { let _ = a.emit("pipeline-progress", PipelineProgress { step: "Denoising channels...".into(), pct: 62 }); }
         let channels = pings_by_channel(parsed);
         channels.iter()
             .map(|(ch, pings)| {
-                let raw = render_gray(pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
+                let render_pings = channel_render_pings(&egn_cache, *ch, pings);
+                let raw = render_gray(&render_pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
                 let (denoised, _) = curvelet_denoise_gray_image_tagged(raw, options.curvelet_threshold, &format!("ch{ch}"));
                 (*ch, denoised)
             })
@@ -218,10 +224,6 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
         BTreeMap::new()
     };
 
-    // Channel pair scoring is O(n) over all pings; compute once for mosaic,
-    // KMZ, and viewer overlay writers that all need the same result.
-    let sidescan_pair = find_sidescan_pair(parsed);
-
     if options.waterfall {
         if let Some(a) = &app { let _ = a.emit("pipeline-progress", PipelineProgress { step: "Rendering Waterfall Image...".into(), pct: 65 }); }
         artifacts.extend(write_waterfall_per_channel(parsed, &output_dir, options.curvelet_denoise, options.curvelet_threshold, &denoised_cache)?);
@@ -229,7 +231,7 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
 
     if options.mosaic {
         if let Some(a) = &app { let _ = a.emit("pipeline-progress", PipelineProgress { step: "Building Geographic Mosaic...".into(), pct: 75 }); }
-        artifacts.extend(write_mosaic_per_channel(parsed, &output_dir, &options.colormap, options.remove_water_column, &options.nadir_mode, options.curvelet_denoise, options.curvelet_threshold, &options.channel_alignments, &denoised_cache, sidescan_pair)?);
+        artifacts.extend(write_mosaic_per_channel(parsed, &output_dir, &options.colormap, options.remove_water_column, &options.nadir_mode, options.curvelet_denoise, options.curvelet_threshold, &options.channel_alignments, &denoised_cache, sidescan_pair, &egn_cache)?);
 
         // ALWAYS write the unified cartographic mosaic image to the root output folder so the user can just open the master file!
         let mut res = 0.20;
@@ -243,10 +245,8 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
             if max_dim / res > 8192.0 { res = max_dim / 8192.0; }
         }
 
-        // ── Bridge: use engine::build_mosaic (TVG + EGN + slant-range) ────────
-        // Replaces the old projection::project_pings_to_grid path which had no
-        // TVG, no histogram normalisation, and no blanking mitigation.
-        let discovery = crate::channel_discovery::discover_and_profile(parsed);
+        // ── Geographic mosaic: EGN-enhanced pings → engine (TVG + slant-range) ─
+        let egn_parsed = parse_with_egn_cache(parsed, &egn_cache);
         let nadir_mode_engine = match options.nadir_mode.as_str() {
             "fill" => crate::mosaic::engine::NadirMode::Fill,
             "raw"  => crate::mosaic::engine::NadirMode::Raw,
@@ -265,7 +265,7 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
             tile_zoom_levels: vec![],           // tile pyramid built separately
             output_dir: output_dir.clone(),
         };
-        let (grid, engine_log) = crate::mosaic::engine::build_mosaic(parsed, &discovery, &engine_config);
+        let (grid, engine_log) = crate::mosaic::engine::build_mosaic(&egn_parsed, &discovery, &engine_config);
         for entry in &engine_log {
             eprintln!("[engine::build_mosaic] {entry}");
         }
@@ -328,14 +328,14 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
         let kml_ready = kml.exists() || write_kml(parsed, &kml).is_ok();
         if kml_ready {
             let kmz = output_dir.join("track.kmz");
-            match write_kmz(&kml, &kmz, parsed, &output_dir, &options.colormap, options.remove_water_column, &options.channel_alignments, sidescan_pair) {
+            match write_kmz(&kml, &kmz, parsed, &output_dir, &options.colormap, options.remove_water_column, &options.channel_alignments, sidescan_pair, &egn_cache) {
                 Ok(has_overlay) => artifacts.push(OutputArtifact {
                     kind: "kmz".to_string(),
                     path: kmz.display().to_string(),
                     details: if has_overlay {
-                        "KMZ with stitched sidescan GroundOverlay georeferenced to sonar swath".to_string()
+                        "track.kmz · EGN-enhanced sidescan GroundOverlay strips (open in Google Earth)".to_string()
                     } else {
-                        "KMZ + trackline (no GPS bounding box — GroundOverlay skipped)".to_string()
+                        "track.kmz · trackline only (sidescan overlay skipped — check GPS/channel pairing)".to_string()
                     },
                 }),
                 Err(e) => artifacts.push(OutputArtifact {
@@ -372,7 +372,7 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
     if options.web_viewer {
         if let Some(a) = &app { let _ = a.emit("pipeline-progress", PipelineProgress { step: "Generating Web Viewer...".into(), pct: 95 }); }
         let viewer_dir = output_dir.join("viewer");
-        match write_native_viewer(parsed, &viewer_dir, &options.colormap, options.remove_water_column, detections, &options.channel_alignments, options.noaa_enc, sidescan_pair) {
+        match write_native_viewer(parsed, &viewer_dir, &options.colormap, options.remove_water_column, detections, &options.channel_alignments, options.noaa_enc, sidescan_pair, &egn_cache) {
             Ok(()) => artifacts.push(OutputArtifact {
                 kind: "viewer".to_string(),
                 path: viewer_dir.display().to_string(),
@@ -2540,6 +2540,7 @@ fn write_mosaic_per_channel(
     alignments: &[crate::channel_alignment::ChannelAlignment],
     denoised_cache: &BTreeMap<u32, GrayImage>,
     sidescan_pair: (Option<u32>, Option<u32>),
+    egn_cache: &BTreeMap<u32, Vec<Ping>>,
 ) -> Result<Vec<OutputArtifact>> {
     let channels = pings_by_channel(parsed);
     let mut arts = Vec::new();
@@ -2553,18 +2554,19 @@ fn write_mosaic_per_channel(
         // When curvelet denoising is enabled, render to gray first so we can
         // denoise the single-channel image before re-colorizing. This gives
         // much cleaner edge preservation than denoising each RGB band separately.
+        let render_pings = channel_render_pings(egn_cache, *ch, pings);
         let img: RgbImage = if denoise {
             let denoised = if let Some(cached) = denoised_cache.get(ch) {
                 cached.clone()
             } else {
-                let gray = render_gray(pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
+                let gray = render_gray(&render_pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
                 let (d, _) = curvelet_denoise_gray_image_tagged(gray, denoise_threshold,
                     &format!("mosaic_ch{ch}"));
                 d
             };
             colorize_gray_image(&denoised, colormap)
         } else {
-            render_mosaic_rgb(pings, WATERFALL_MAX_W, WATERFALL_MAX_H, colormap)
+            render_mosaic_rgb(&render_pings, WATERFALL_MAX_W, WATERFALL_MAX_H, colormap)
         };
         let denoise_tag = if denoise {
             format!(" · curvelet-denoised (t={denoise_threshold:.3})")
@@ -2611,17 +2613,8 @@ fn write_mosaic_per_channel(
             return Ok(arts);
         }
 
-        // Apply EGN to port and star channels independently.
-        // GT51 asymmetric wings get a diagonal-slope correction;
-        // UHD paired channels get V-shaped correction.
-        let port_lbl = channel_label(parsed, pk);
-        let star_lbl = channel_label(parsed, sk);
-        let port_role  = egn_role_from_label(&port_lbl, pk);
-        let star_role  = egn_role_from_label(&star_lbl, sk);
-        let port_egn: Vec<Ping> = apply_egn_to_channel_pings(port_pings, port_role);
-        let star_egn: Vec<Ping> = apply_egn_to_channel_pings(star_pings, star_role);
-        let port_pings: Vec<&Ping> = port_egn.iter().collect();
-        let star_pings: Vec<&Ping> = star_egn.iter().collect();
+        let port_pings: Vec<&Ping> = channel_render_pings(egn_cache, pk, port_pings);
+        let star_pings: Vec<&Ping> = channel_render_pings(egn_cache, sk, star_pings);
 
         // Data-driven downscan channel lookup: any channel labeled chirp_downscan
         // that is NOT one of the selected sidescan arms, with the most pings.
@@ -3110,30 +3103,28 @@ fn write_kmz(
     remove_water_column: bool,
     alignments: &[crate::channel_alignment::ChannelAlignment],
     sidescan_pair: (Option<u32>, Option<u32>),
+    egn_cache: &BTreeMap<u32, Vec<Ping>>,
 ) -> Result<bool> {
     let kml_str = fs::read_to_string(kml_path)
         .with_context(|| format!("Failed to read KML for KMZ: {}", kml_path.display()))?;
 
     // Use pre-computed port + starboard sidescan channel pair
     let (port_ch, star_ch) = sidescan_pair;
-    if port_ch.is_none() && star_ch.is_none() {
-        return Ok(false);
-    }
+    let mut has_overlay = false;
 
-    // Collect GPS-valid pings for each channel
+    // Collect GPS-valid pings for each channel (EGN-enhanced when available)
     let channels = pings_by_channel(parsed);
     let port_pings: Vec<&Ping> = port_ch
-        .and_then(|ch| channels.get(&ch))
-        .map(|v| v.iter().filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0)).copied().collect())
+        .and_then(|ch| channels.get(&ch).map(|v| channel_gps_pings(egn_cache, ch, v)))
         .unwrap_or_default();
     let star_pings: Vec<&Ping> = star_ch
-        .and_then(|ch| channels.get(&ch))
-        .map(|v| v.iter().filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0)).copied().collect())
+        .and_then(|ch| channels.get(&ch).map(|v| channel_gps_pings(egn_cache, ch, v)))
         .unwrap_or_default();
 
     // Use whichever channel has more pings to drive segmentation & geography
     let guide_pings: &Vec<&Ping> = if star_pings.len() >= port_pings.len() { &star_pings } else { &port_pings };
-    if guide_pings.len() < 4 {
+    if (port_ch.is_none() && star_ch.is_none()) || guide_pings.len() < 4 {
+        write_kmz_archive(kmz_path, &kml_str, &[])?;
         return Ok(false);
     }
 
@@ -3268,37 +3259,46 @@ fn write_kmz(
         }
     }
 
-    if png_entries.is_empty() {
-        return Ok(false);
-    }
+    has_overlay = !png_entries.is_empty();
 
-    // Inject all segmented GroundOverlays + gx namespace into KML
-    let overlays_block = overlay_kml_parts.join("\n");
-    let final_kml = if let Some(pos) = kml_str.rfind("</Document>") {
-        let mut s = kml_str[..pos].to_string();
-        s.push_str(&overlays_block);
-        s.push_str("\n</Document>\n</kml>");
-        s = s.replace(
-            "xmlns=\"http://www.opengis.net/kml/2.2\"",
-            "xmlns=\"http://www.opengis.net/kml/2.2\" xmlns:gx=\"http://www.google.com/kml/ext/2.2\"",
-        );
-        s
+    // Inject segmented GroundOverlays when available; always write track.kmz.
+    let final_kml = if has_overlay {
+        let overlays_block = overlay_kml_parts.join("\n");
+        if let Some(pos) = kml_str.rfind("</Document>") {
+            let mut s = kml_str[..pos].to_string();
+            s.push_str(&overlays_block);
+            s.push_str("\n</Document>\n</kml>");
+            s.replace(
+                "xmlns=\"http://www.opengis.net/kml/2.2\"",
+                "xmlns=\"http://www.opengis.net/kml/2.2\" xmlns:gx=\"http://www.google.com/kml/ext/2.2\"",
+            )
+        } else {
+            kml_str.to_string()
+        }
     } else {
-        kml_str
+        kml_str.to_string()
     };
 
+    write_kmz_archive(kmz_path, &final_kml, &png_entries)?;
+    Ok(has_overlay)
+}
+
+fn write_kmz_archive(
+    kmz_path: &Path,
+    kml_body: &str,
+    png_entries: &[(String, Vec<u8>)],
+) -> Result<()> {
     let file = fs::File::create(kmz_path)
         .with_context(|| format!("Failed to create KMZ: {}", kmz_path.display()))?;
     let mut zip = zip::ZipWriter::new(file);
     zip.start_file("doc.kml", SimpleFileOptions::default())?;
-    zip.write_all(final_kml.as_bytes())?;
-    for (name, bytes) in &png_entries {
+    zip.write_all(kml_body.as_bytes())?;
+    for (name, bytes) in png_entries {
         zip.start_file(name.as_str(), SimpleFileOptions::default())?;
         zip.write_all(bytes)?;
     }
     zip.finish()?;
-
-    Ok(true)
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -3433,7 +3433,7 @@ fn estimate_bottom_hardness(samples: &[u16]) -> (Option<f32>, &'static str) {
     (Some((hardness * 1000.0).round() / 1000.0), label)
 }
 
-fn write_native_viewer(parsed: &ParseResult, viewer_dir: &Path, colormap: &str, remove_water_column: bool, detections: Option<&DetectionSummary>, alignments: &[crate::channel_alignment::ChannelAlignment], enable_nautical_charts: bool, sidescan_pair: (Option<u32>, Option<u32>)) -> Result<()> {
+fn write_native_viewer(parsed: &ParseResult, viewer_dir: &Path, colormap: &str, remove_water_column: bool, detections: Option<&DetectionSummary>, alignments: &[crate::channel_alignment::ChannelAlignment], enable_nautical_charts: bool, sidescan_pair: (Option<u32>, Option<u32>), egn_cache: &BTreeMap<u32, Vec<Ping>>) -> Result<()> {
     fs::create_dir_all(viewer_dir)
         .with_context(|| format!("Failed to create viewer dir: {}", viewer_dir.display()))?;
 
@@ -3522,7 +3522,7 @@ fn write_native_viewer(parsed: &ParseResult, viewer_dir: &Path, colormap: &str, 
     // ── Generate sonar overlay strips (same geometry as KMZ) ──────────────────
     // Renders sidescan segments as PNG files + a JSON manifest so the viewer can
     // display them as MapLibre `image` sources along the track.
-    let sonar_overlays = generate_viewer_sonar_overlays(parsed, viewer_dir, colormap, remove_water_column, alignments, sidescan_pair)?;
+    let sonar_overlays = generate_viewer_sonar_overlays(parsed, viewer_dir, colormap, remove_water_column, alignments, sidescan_pair, egn_cache)?;
     let overlays_json_str = serde_json::to_string(&sonar_overlays)?;
 
     // ── data.js – inline GeoJSON as globals so index.html works via file:// ──
@@ -3934,6 +3934,7 @@ fn generate_viewer_sonar_overlays(
     remove_water_column: bool,
     alignments: &[crate::channel_alignment::ChannelAlignment],
     sidescan_pair: (Option<u32>, Option<u32>),
+    egn_cache: &BTreeMap<u32, Vec<Ping>>,
 ) -> Result<Vec<serde_json::Value>> {
     // Use pre-computed port + starboard sidescan channel pair
     let (port_ch, star_ch) = sidescan_pair;
@@ -3943,12 +3944,10 @@ fn generate_viewer_sonar_overlays(
 
     let channels = pings_by_channel(parsed);
     let port_pings: Vec<&Ping> = port_ch
-        .and_then(|ch| channels.get(&ch))
-        .map(|v| v.iter().filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0)).copied().collect())
+        .and_then(|ch| channels.get(&ch).map(|v| channel_gps_pings(egn_cache, ch, v)))
         .unwrap_or_default();
     let star_pings: Vec<&Ping> = star_ch
-        .and_then(|ch| channels.get(&ch))
-        .map(|v| v.iter().filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0)).copied().collect())
+        .and_then(|ch| channels.get(&ch).map(|v| channel_gps_pings(egn_cache, ch, v)))
         .unwrap_or_default();
 
     let guide_pings: &Vec<&Ping> = if star_pings.len() >= port_pings.len() { &star_pings } else { &port_pings };
@@ -4121,6 +4120,90 @@ pub fn apply_egn_to_channel_pings(pings: &[&Ping], role: SpatialRole) -> Vec<Pin
             cloned
         })
         .collect()
+}
+
+/// Pre-compute EGN-corrected pings for every sidescan/downscan channel.
+fn build_egn_channel_cache(parsed: &ParseResult) -> BTreeMap<u32, Vec<Ping>> {
+    let channels = pings_by_channel(parsed);
+    let mut cache = BTreeMap::new();
+    for (ch, pings) in channels {
+        let lbl = channel_label(parsed, ch);
+        if !lbl.contains("sidescan") && !lbl.contains("downscan") {
+            continue;
+        }
+        let role = egn_role_from_label(&lbl, ch);
+        if role == SpatialRole::Unassigned {
+            continue;
+        }
+        let refs: Vec<&Ping> = pings.iter().copied().collect();
+        cache.insert(ch, apply_egn_to_channel_pings(&refs, role));
+    }
+    cache
+}
+
+/// Return EGN-enhanced ping refs when cached; otherwise raw refs.
+fn channel_render_pings<'a>(
+    egn_cache: &'a BTreeMap<u32, Vec<Ping>>,
+    ch: u32,
+    raw: &'a [&'a Ping],
+) -> Vec<&'a Ping> {
+    if let Some(egn) = egn_cache.get(&ch) {
+        egn.iter().collect()
+    } else {
+        raw.to_vec()
+    }
+}
+
+fn ping_has_gps(p: &Ping) -> bool {
+    p.latitude.is_finite()
+        && p.longitude.is_finite()
+        && (p.latitude != 0.0 || p.longitude != 0.0)
+}
+
+/// GPS-valid pings for overlay/KMZ paths, preferring EGN-corrected samples.
+fn channel_gps_pings<'a>(
+    egn_cache: &'a BTreeMap<u32, Vec<Ping>>,
+    ch: u32,
+    raw_channel: &'a [&'a Ping],
+) -> Vec<&'a Ping> {
+    let source = channel_render_pings(egn_cache, ch, raw_channel);
+    source.into_iter().filter(|p| ping_has_gps(p)).collect()
+}
+
+/// Clone parse result, substituting EGN-enhanced samples for sonar channels.
+fn parse_with_egn_cache(parsed: &ParseResult, egn_cache: &BTreeMap<u32, Vec<Ping>>) -> ParseResult {
+    if egn_cache.is_empty() {
+        return parsed.clone();
+    }
+    let mut out = parsed.clone();
+    out.pings = parsed
+        .pings
+        .iter()
+        .map(|p| {
+            egn_cache
+                .get(&p.channel)
+                .and_then(|v| v.iter().find(|ep| ep.sequence == p.sequence))
+                .cloned()
+                .unwrap_or_else(|| p.clone())
+        })
+        .collect();
+    out
+}
+
+/// Prefer discovery-driven port/star pairing; fall back to legacy probe.
+fn resolve_sidescan_pair(
+    parsed: &ParseResult,
+    discovery: &crate::channel_discovery::DiscoveryResult,
+) -> (Option<u32>, Option<u32>) {
+    let pair = discovery.primary_sidescan_pair();
+    if pair.0.is_some() || pair.1.is_some() {
+        eprintln!(
+            "[channel-probe] discovery pair: port={:?} star={:?}",
+            pair.0, pair.1
+        );
+        return pair;
+    }
+    find_sidescan_pair(parsed)
 }
 
 

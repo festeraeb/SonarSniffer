@@ -180,5 +180,5 @@ CI builds CLI zips, Windows MSI/NSIS/Setup.exe, and macOS DMG, then attaches the
 
 ## License
 
-Contact: cesarops@cesarops.com  
+Contact: nautik9@cesarops.com  
 Website: https://cesarops.com
