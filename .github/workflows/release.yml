@@ -39,9 +39,25 @@ jobs:
       - name: Stage sidecars
         shell: pwsh
         run: ./scripts/stage_tauri_sidecars.ps1
+      - name: Cache Tauri bundler tools (NSIS/WiX)
+        uses: actions/cache@v4
+        with:
+          path: desktop/src-tauri/target/tools
+          key: tauri-bundler-tools-win-${{ hashFiles('desktop/src-tauri/tauri.conf.json') }}
+          restore-keys: |
+            tauri-bundler-tools-win-
       - name: Build desktop NSIS (primary installer)
         working-directory: desktop/src-tauri
-        run: cargo tauri build --verbose --bundles nsis
+        shell: pwsh
+        run: |
+          $max = 3
+          for ($i = 1; $i -le $max; $i++) {
+            Write-Host "NSIS build attempt $i/$max"
+            cargo tauri build --verbose --bundles nsis
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            if ($i -lt $max) { Start-Sleep -Seconds 45 }
+          }
+          exit 1
       - name: Build desktop MSI (optional; WiX can fail on long paths/ICE)
         working-directory: desktop/src-tauri
         continue-on-error: true
