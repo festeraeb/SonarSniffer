@@ -294,6 +294,8 @@ pub fn build_mosaic(
             };
 
             // Arc-aware trapezoid: leading edge uses heading_a, trailing uses heading_b.
+            // Cross-track position bilinearly interpolates between the two edge headings
+            // so adjacent ping-pairs share exact corners at the junction ping.
             let (cos_a0, sin_a0) = cross_track_unit(heading_a, angle_offset);
             let (cos_b1, sin_b1) = cross_track_unit(heading_b, angle_offset);
 
@@ -356,8 +358,12 @@ pub fn build_mosaic(
                         1.0
                     };
 
-                    let final_weight = gauss_weight * edge_weight;
+                    // Skip heavily feathered edge samples; compositing uses nadir distance, not blend.
+                    if gauss_weight * edge_weight < 0.05 {
+                        continue;
+                    }
 
+                    // Bilinear ground position: lerp cross-track at each edge, then lerp along track.
                     let proj_m = ground_m * center_scale;
                     let px0 = ax + proj_m * cos_a0;
                     let py0 = ay + proj_m * sin_a0;
@@ -366,7 +372,8 @@ pub fn build_mosaic(
                     let px = px0 * (1.0 - t) + px1 * t;
                     let py = py0 * (1.0 - t) + py1 * t;
 
-                    grid.add_weighted_sample(px, py, normalized, final_weight);
+                    // Closest-to-nadir wins when passes cross (spec item #3).
+                    grid.add_nadir_sample(px, py, normalized, ground_m as f32);
                 }
             }
         }
@@ -857,7 +864,7 @@ fn generate_kml_super_overlay(
     tiles_dir: &Path,
     kml_path: &Path,
 ) -> Result<(), anyhow::Error> {
-    let (min_lat, min_lon, max_lat, max_lon) = grid.bounds_latlon();
+    let (_min_lat, _min_lon, _max_lat, _max_lon) = grid.bounds_latlon();
 
     let mut kml = String::new();
     kml.push_str(r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1086,6 +1093,52 @@ mod tests {
         // ground = sqrt(10² - 3²) = sqrt(91) ≈ 9.54m
         let swath = compute_swath_m(1000, 3.0, 0, &config);
         assert!(swath > 9.0 && swath < 10.0, "Swath should be ~9.5m, got {swath:.2}");
+    }
+
+    #[test]
+    fn test_arc_trapezoid_junction_shared() {
+        // Ping B is the junction between pairs AB and BC. At t=1 on AB and t=0 on BC,
+        // bilinear projection must land on the same metre coordinates.
+        let heading_a = 0.0;
+        let heading_b = 45.0;
+        let heading_c = 90.0;
+        let angle_offset = -90.0; // port
+        let (ax, ay) = (0.0, 0.0);
+        let (bx, by) = (10.0, 0.0);
+        let (cx, cy) = (10.0, 10.0);
+        let ground_m = 5.0;
+
+        let (cos_a0, sin_a0) = cross_track_unit(heading_a, angle_offset);
+        let (cos_b1, sin_b1) = cross_track_unit(heading_b, angle_offset);
+        let (cos_b0, sin_b0) = cross_track_unit(heading_b, angle_offset);
+        let (cos_c1, sin_c1) = cross_track_unit(heading_c, angle_offset);
+
+        // AB at t=1
+        let px_ab = (ax + ground_m * cos_a0) * 0.0 + (bx + ground_m * cos_b1) * 1.0;
+        let py_ab = (ay + ground_m * sin_a0) * 0.0 + (by + ground_m * sin_b1) * 1.0;
+
+        // BC at t=0
+        let px_bc = (bx + ground_m * cos_b0) * 1.0 + (cx + ground_m * cos_c1) * 0.0;
+        let py_bc = (by + ground_m * sin_b0) * 1.0 + (cy + ground_m * sin_c1) * 0.0;
+
+        assert!(
+            (px_ab - px_bc).abs() < 1e-9 && (py_ab - py_bc).abs() < 1e-9,
+            "junction mismatch: AB=({px_ab},{py_ab}) BC=({px_bc},{py_bc})"
+        );
+    }
+
+    #[test]
+    fn test_nadir_priority_compositing() {
+        use crate::mosaic::grid::MosaicGrid;
+        let grid = MosaicGrid::new(0.0, 0.0, 1.0, 1.0, 0.5);
+        // Far-from-nadir sample first
+        grid.add_nadir_sample(0.25, 0.25, 100.0, 20.0);
+        // Closer-to-nadir should replace
+        grid.add_nadir_sample(0.25, 0.25, 50.0, 5.0);
+        assert!((grid.get_normalized_pixel(0, 0) - 50.0).abs() < 0.01);
+        // Worse nadir distance should not overwrite
+        grid.add_nadir_sample(0.25, 0.25, 200.0, 15.0);
+        assert!((grid.get_normalized_pixel(0, 0) - 50.0).abs() < 0.01);
     }
 
     #[test]

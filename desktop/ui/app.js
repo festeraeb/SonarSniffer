@@ -189,7 +189,7 @@ async function browseFolder() {
 
 async function runPipeline() {
   if (!state.preflight?.ready) {
-    setConsole("pipelineOutput", "Install required dependencies first (GStreamer + WebView2 on Windows).");
+    setConsole("pipelineOutput", "Install required dependencies first (WebView2 on Windows).");
     return;
   }
   const fileName = document.getElementById("pipelineInput")?.value?.trim();

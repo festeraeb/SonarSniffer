@@ -1,10 +1,12 @@
 //! Video encoding from processed frames.
 //!
 //! Supports two backends:
-//! - **GStreamer** (feature: video-gstreamer): MP4/H.264 output
-//! - **GIF fallback** (no feature): Animated GIF
+//! - **Pure-Rust AV1** (default): rav1e + hand-written MP4 muxer
+//! - **GStreamer** (feature: video-gstreamer): optional legacy MP4/H.264
 
-use crate::video_enhanced::{EnhancedVideoResult, ProcessedFrame, ProcessingStats, SonarProcessingParams};
+use crate::video_enhanced::{
+    DatasetStatistics, EnhancedVideoResult, ProcessedFrame, ProcessingStats, SonarProcessingParams,
+};
 use std::path::Path;
 
 #[cfg(feature = "video-gstreamer")]
@@ -12,6 +14,7 @@ pub fn encode_to_video<F>(
     frames: Vec<ProcessedFrame>,
     output_dir: &Path,
     params: &SonarProcessingParams,
+    _stats: &DatasetStatistics,
     on_progress: F,
 ) -> anyhow::Result<EnhancedVideoResult>
 where
@@ -213,14 +216,15 @@ pub fn encode_to_video<F>(
     frames: Vec<ProcessedFrame>,
     output_dir: &Path,
     params: &SonarProcessingParams,
+    stats: &DatasetStatistics,
     on_progress: F,
 ) -> anyhow::Result<EnhancedVideoResult>
 where
     F: Fn(u32, u32) + Send + 'static,
 {
-    use gif::{Encoder, Frame, Repeat};
-    use std::fs::File;
-    
+    use crate::mp4_av1::{write_mp4, Av1Packet};
+    use rav1e::prelude::*;
+
     if frames.is_empty() {
         return Ok(EnhancedVideoResult {
             success: false,
@@ -229,74 +233,115 @@ where
             processing_stats: None,
         });
     }
-    
-    let width = frames[0].width as u16;
-    let height = frames[0].height as u16;
+
+    let width = frames[0].width as usize;
+    let height = frames[0].height as usize;
     let n_frames = frames.len() as u32;
-    
-    let gif_path = output_dir.join("sonar_waterfall.gif");
-    let mut file = File::create(&gif_path)?;
-    
-    // Build amber palette (256 entries) so the GIF looks the same as the PNG mosaic
-    let mut palette = Vec::with_capacity(256 * 3);
-    let amber_stops: &[(f32, [u8; 3])] = &[
-        (0.00, [  0,   0,   0]),
-        (0.25, [ 80,  20,   0]),
-        (0.60, [200, 100,   0]),
-        (0.85, [255, 180,  20]),
-        (1.00, [255, 250, 200]),
-    ];
-    for i in 0..=255usize {
-        let n = i as f32 / 255.0;
-        let [r, g, b] = amber_lerp(n, amber_stops);
-        palette.extend_from_slice(&[r, g, b]);
-    }
-    
-    let mut encoder = Encoder::new(&mut file, width, height, &palette)?;
-    encoder.set_repeat(Repeat::Infinite)?;
-    
-    for (i, processed_frame) in frames.iter().enumerate() {
-        // Convert RGB to amber palette index.
-        // Since the amber LUT is strictly monotone in the red channel (0→255),
-        // the red channel is a reliable intensity proxy for reverse-mapping.
-        let indexed: Vec<u8> = processed_frame
-            .pixels
-            .chunks(3)
-            .map(|rgb| rgb[0]) // red channel encodes intensity for amber palette
-            .collect();
-        
-        let mut frame = Frame::default();
-        frame.width = width;
-        frame.height = height;
-        frame.buffer = indexed.into();
-        frame.delay = (100 / params.fps) as u16; // delay in 1/100s
-        
-        encoder.write_frame(&frame)?;
+    let fps = params.fps.max(1);
+
+    let enc = EncoderConfig {
+        width,
+        height,
+        time_base: Rational { num: 1, den: fps as u64 },
+        bit_depth: 8,
+        chroma_sampling: ChromaSampling::Cs420,
+        speed_settings: SpeedSettings::from_preset(9),
+        min_key_frame_interval: 12,
+        max_key_frame_interval: 120,
+        low_latency: true,
+        ..Default::default()
+    };
+    let cfg = Config::new().with_encoder_config(enc);
+    let mut ctx: Context<u8> = cfg
+        .new_context()
+        .map_err(|e| anyhow::anyhow!("rav1e context init failed: {e:?}"))?;
+
+    let chroma_w = width.div_ceil(2);
+    let chroma_h = height.div_ceil(2);
+
+    for (i, frame) in frames.iter().enumerate() {
+        let mut f = ctx.new_frame();
+        rgb_to_yuv420_into(&frame.pixels, width, height, chroma_w, chroma_h, &mut f);
+        ctx.send_frame(f)
+            .map_err(|e| anyhow::anyhow!("rav1e send_frame failed: {e:?}"))?;
         on_progress((i + 1) as u32, n_frames);
     }
-    
+    ctx.flush();
+
+    let mut packets: Vec<Av1Packet> = Vec::with_capacity(frames.len());
+    loop {
+        match ctx.receive_packet() {
+            Ok(pkt) => {
+                let is_key = matches!(pkt.frame_type, FrameType::KEY);
+                packets.push(Av1Packet {
+                    data: pkt.data,
+                    is_key,
+                });
+            }
+            Err(EncoderStatus::Encoded) => continue,
+            Err(EncoderStatus::LimitReached) => break,
+            Err(EncoderStatus::NeedMoreData) => break,
+            Err(e) => return Err(anyhow::anyhow!("rav1e receive_packet failed: {e:?}")),
+        }
+    }
+
+    if packets.is_empty() {
+        return Ok(EnhancedVideoResult {
+            success: false,
+            output_path: None,
+            status: "AV1 encoder produced no packets".to_string(),
+            processing_stats: None,
+        });
+    }
+
+    let mp4_path = output_dir.join("sonar_waterfall.mp4");
+    let mut file = std::fs::File::create(&mp4_path)?;
+    write_mp4(&mut file, &packets, width as u32, height as u32, fps, 8)?;
+    {
+        use std::io::Write as _;
+        file.flush()?;
+    }
+    drop(file);
+
+    let file_mb = std::fs::metadata(&mp4_path)
+        .map(|m| m.len() as f64 / 1_048_576.0)
+        .unwrap_or(0.0);
+
+    let gap_count = stats.gaps.len();
+    let histogram_total: u32 = stats.histogram.iter().copied().sum();
+    let percentile_span = (stats.percentile_ceiling - stats.percentile_floor).max(1.0);
+    let processed_mean =
+        ((stats.raw_mean - stats.percentile_floor) / percentile_span).clamp(0.0, 1.0);
+
     Ok(EnhancedVideoResult {
         success: true,
-        output_path: Some(gif_path.display().to_string()),
+        output_path: Some(mp4_path.display().to_string()),
         status: format!(
-            "Enhanced GIF export complete: {} frames (install GStreamer for MP4)",
-            n_frames
+            "Pure-Rust AV1/MP4 export complete: {} frames, {}x{} @ {}fps ({:.1} MB), gaps={}, stdev={:.1}, histogram_samples={}",
+            n_frames,
+            width,
+            height,
+            fps,
+            file_mb,
+            gap_count,
+            stats.raw_stddev,
+            histogram_total
         ),
         processing_stats: Some(ProcessingStats {
-            total_pings: (n_frames * height as u32) as usize,
+            total_pings: stats.total_pings,
             frames_generated: n_frames,
-            primary_channel: 0,
+            primary_channel: stats.primary_channel,
             video_width: width as u32,
             video_height: height as u32,
-            fps: params.fps,
-            duration_secs: n_frames as f32 / params.fps as f32,
-            file_size_mb: std::fs::metadata(&gif_path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0),
-            raw_min: 0.0,
-            raw_max: 0.0,
-            raw_mean: 0.0,
+            fps,
+            duration_secs: n_frames as f32 / fps as f32,
+            file_size_mb: file_mb,
+            raw_min: stats.raw_min,
+            raw_max: stats.raw_max,
+            raw_mean: stats.raw_mean,
             processed_min: 0.0,
             processed_max: 1.0,
-            processed_mean: 0.5,
+            processed_mean,
             tvg_applied: true,
             log_compression_applied: true,
             filtering_applied: true,
@@ -306,20 +351,62 @@ where
     })
 }
 
-/// Linear-interpolate through colour stops; used for GIF palette generation.
-fn amber_lerp(n: f32, stops: &[(f32, [u8; 3])]) -> [u8; 3] {
-    let n = n.clamp(0.0, 1.0);
-    for i in 1..stops.len() {
-        let (t0, c0) = stops[i - 1];
-        let (t1, c1) = stops[i];
-        if n <= t1 || i == stops.len() - 1 {
-            let t = if (t1 - t0).abs() < 1e-6 { 0.0 } else { ((n - t0) / (t1 - t0)).clamp(0.0, 1.0) };
-            return [
-                (c0[0] as f32 + (c1[0] as f32 - c0[0] as f32) * t) as u8,
-                (c0[1] as f32 + (c1[1] as f32 - c0[1] as f32) * t) as u8,
-                (c0[2] as f32 + (c1[2] as f32 - c0[2] as f32) * t) as u8,
-            ];
+#[cfg(not(feature = "video-gstreamer"))]
+fn rgb_to_yuv420_into(
+    rgb: &[u8],
+    width: usize,
+    height: usize,
+    chroma_w: usize,
+    chroma_h: usize,
+    frame: &mut rav1e::prelude::Frame<u8>,
+) {
+    {
+        let y_plane = &mut frame.planes[0];
+        let mut rows = y_plane.mut_slice(Default::default());
+        let mut rows_iter = rows.rows_iter_mut();
+        for y in 0..height {
+            let row = rows_iter.next().unwrap();
+            for x in 0..width {
+                let idx = (y * width + x) * 3;
+                let r = rgb[idx] as f32;
+                let g = rgb[idx + 1] as f32;
+                let b = rgb[idx + 2] as f32;
+                let yv = 16.0 + (0.257 * r + 0.504 * g + 0.098 * b);
+                row[x] = yv.clamp(16.0, 235.0) as u8;
+            }
         }
     }
-    [255, 255, 255]
+    for plane_idx in 1..=2usize {
+        let p = &mut frame.planes[plane_idx];
+        let mut rows = p.mut_slice(Default::default());
+        let mut rows_iter = rows.rows_iter_mut();
+        for cy in 0..chroma_h {
+            let row = rows_iter.next().unwrap();
+            for cx in 0..chroma_w {
+                let mut acc = 0.0f32;
+                let mut cnt = 0.0f32;
+                for dy in 0..2 {
+                    for dx in 0..2 {
+                        let sx = cx * 2 + dx;
+                        let sy = cy * 2 + dy;
+                        if sx < width && sy < height {
+                            let idx = (sy * width + sx) * 3;
+                            let r = rgb[idx] as f32;
+                            let g = rgb[idx + 1] as f32;
+                            let b = rgb[idx + 2] as f32;
+                            let v = if plane_idx == 1 {
+                                128.0 + (-0.148 * r - 0.291 * g + 0.439 * b)
+                            } else {
+                                128.0 + (0.439 * r - 0.368 * g - 0.071 * b)
+                            };
+                            acc += v;
+                            cnt += 1.0;
+                        }
+                    }
+                }
+                let val = if cnt > 0.0 { acc / cnt } else { 128.0 };
+                row[cx] = val.clamp(16.0, 240.0) as u8;
+            }
+        }
+    }
 }

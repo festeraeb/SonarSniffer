@@ -118,14 +118,11 @@ pub fn project_pings_to_grid(parse_res: &ParseResult, resolution_m: f32, _colorm
                 ping.samples[n - 1] as f32
             };
 
-            // Gaussian feathering toward beam edges (weight highest near nadir/center).
-            let weight = (-((ground_m * ground_scale).powi(2) / (2.0 * sigma * sigma))).exp() as f32;
-
             let proj_ground = ground_m * ground_scale;
             let px = cx + proj_ground * cos_a;
             let py = cy + proj_ground * sin_a;
 
-            grid.add_weighted_sample(px, py, intensity, weight);
+            grid.add_nadir_sample(px, py, intensity, ground_m as f32);
         }
     });
 

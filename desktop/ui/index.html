@@ -13,7 +13,7 @@
   <div id="depsGate" class="deps-gate hidden">
     <div class="deps-gate-panel">
       <h2>Required components missing</h2>
-      <p id="depsGateSummary">SonarSniffer requires GStreamer (video export). Install the items below, then re-check.</p>
+      <p id="depsGateSummary">Install required runtime components below, then re-check.</p>
       <ul id="depsList" class="deps-list"></ul>
       <div class="field-row deps-actions">
         <button id="installAllDepsBtn" class="btn primary">Install all (automatic)</button>
@@ -81,7 +81,7 @@
     <section class="card full" id="section-pipeline">
       <div class="card-header">
         <h3>Run SonarSniffer Pipeline</h3>
-        <span class="muted small">Video export requires GStreamer</span>
+        <span class="muted small">Video export uses built-in AV1 (no extra deps)</span>
       </div>
 
       <div class="form-grid">

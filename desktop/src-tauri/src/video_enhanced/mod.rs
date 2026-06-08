@@ -325,7 +325,7 @@ where
         .context("Failed to apply processing pipeline")?;
     
     // Pass 3: Encode video
-    let result = encode_to_video(processed, output_dir, &params, on_progress)
+    let result = encode_to_video(processed, output_dir, &params, &stats, on_progress)
         .context("Failed to encode video")?;
     
     Ok(result)

@@ -52,7 +52,7 @@ rav1e = { version = "0.7", default-features = false }
 # MBTiles output
 mbtiles = "0.15"
 
-# GStreamer video (required for MP4 export)
+# Optional legacy H.264 path (default export uses built-in rav1e AV1).
 [dependencies.gstreamer]
 version = "0.23"
 optional = true
@@ -68,7 +68,7 @@ features = ["features2d", "calib3d"]
 optional = true
 
 [features]
-default = ["video-gstreamer"]
+default = []
 video-gstreamer = ["dep:gstreamer", "dep:gstreamer-app"]
 soundtiles = ["dep:opencv"]
 full-license = []

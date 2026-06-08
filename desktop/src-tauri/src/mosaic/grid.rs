@@ -12,17 +12,20 @@ pub struct MosaicGrid {
     pub resolution: f64,
     pub width: usize,
     pub height: usize,
-    pub pixels: Vec<AtomicU64>, // packed (sum, weight) as f32 pairs
+    /// Packed (intensity, nadir_dist_m). Closest-to-nadir sample wins at each pixel.
+    pub pixels: Vec<AtomicU64>,
 }
 
 impl MosaicGrid {
+    const EMPTY_NADIR: f32 = f32::MAX;
+
     pub fn new(min_x: f64, min_y: f64, max_x: f64, max_y: f64, resolution: f64) -> Self {
         let width = ((max_x - min_x) / resolution).ceil() as usize + 1;
         let height = ((max_y - min_y) / resolution).ceil() as usize + 1;
 
         let total_pixels = width * height;
         let mut pixels = Vec::with_capacity(total_pixels);
-        let initial_val = Self::pack(0.0, 0.0);
+        let initial_val = Self::pack_sample(0.0, Self::EMPTY_NADIR);
 
         for _ in 0..total_pixels {
             pixels.push(AtomicU64::new(initial_val));
@@ -32,24 +35,25 @@ impl MosaicGrid {
     }
 
     #[inline(always)]
-    fn pack(sum: f32, weight: f32) -> u64 {
-        ((sum.to_bits() as u64) << 32) | (weight.to_bits() as u64)
+    fn pack_sample(intensity: f32, nadir_dist_m: f32) -> u64 {
+        ((intensity.to_bits() as u64) << 32) | (nadir_dist_m.to_bits() as u64)
     }
 
     #[inline(always)]
-    fn unpack(bits: u64) -> (f32, f32) {
-        let sum = f32::from_bits((bits >> 32) as u32);
-        let weight = f32::from_bits(bits as u32);
-        (sum, weight)
+    fn unpack_sample(bits: u64) -> (f32, f32) {
+        let intensity = f32::from_bits((bits >> 32) as u32);
+        let nadir_dist_m = f32::from_bits(bits as u32);
+        (intensity, nadir_dist_m)
     }
 
+    /// Write a sample only if it is closer to nadir than any existing value at this pixel.
     #[inline(always)]
-    pub fn add_weighted_sample(&self, x: f64, y: f64, intensity: f32, weight: f32) {
+    pub fn add_nadir_sample(&self, x: f64, y: f64, intensity: f32, nadir_dist_m: f32) {
         if x < self.min_x || x > self.max_x || y < self.min_y || y > self.max_y {
             return;
         }
 
-        if weight <= 0.0 {
+        if intensity <= 0.0 || !nadir_dist_m.is_finite() {
             return;
         }
 
@@ -60,11 +64,19 @@ impl MosaicGrid {
             let idx = py * self.width + px;
             let mut current = self.pixels[idx].load(Ordering::Relaxed);
             loop {
-                let (sum, w) = Self::unpack(current);
-                let new_sum = sum + intensity * weight;
-                let new_w = w + weight;
-                let new_bits = Self::pack(new_sum, new_w);
-                match self.pixels[idx].compare_exchange_weak(current, new_bits, Ordering::Relaxed, Ordering::Relaxed) {
+                let (cur_i, cur_n) = Self::unpack_sample(current);
+                let better = nadir_dist_m < cur_n - 1e-4
+                    || ((nadir_dist_m - cur_n).abs() <= 1e-4 && intensity > cur_i);
+                if !better {
+                    return;
+                }
+                let new_bits = Self::pack_sample(intensity, nadir_dist_m);
+                match self.pixels[idx].compare_exchange_weak(
+                    current,
+                    new_bits,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
                     Ok(_) => break,
                     Err(e) => current = e,
                 }
@@ -72,10 +84,20 @@ impl MosaicGrid {
         }
     }
 
+    /// Legacy name kept for callers; routes to nadir-priority compositing.
+    #[inline(always)]
+    pub fn add_weighted_sample(&self, x: f64, y: f64, intensity: f32, nadir_dist_m: f32) {
+        self.add_nadir_sample(x, y, intensity, nadir_dist_m);
+    }
+
     pub fn get_normalized_pixel(&self, px: usize, py: usize) -> f32 {
         let idx = py * self.width + px;
-        let (sum, weight) = Self::unpack(self.pixels[idx].load(Ordering::Relaxed));
-        if weight <= 0.0 { 0.0 } else { sum / weight }
+        let (intensity, nadir_dist_m) = Self::unpack_sample(self.pixels[idx].load(Ordering::Relaxed));
+        if nadir_dist_m >= Self::EMPTY_NADIR - 1.0 {
+            0.0
+        } else {
+            intensity
+        }
     }
 
     pub fn bounds_latlon(&self) -> (f64, f64, f64, f64) {

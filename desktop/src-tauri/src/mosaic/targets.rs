@@ -1,5 +1,5 @@
 use crate::garmin_rsd_parser::{Ping, ParseResult};
-// use nauticuvs::filters::curvelet_denoising; // Will be activated via actual nauticuvs integration
+// Curvelet scoring uses bundled FDCT via outputs::internal_fdct (nauticuvs-full, not crates.io).
 use image::{ImageBuffer, Rgba};
 use std::path::Path;
 

@@ -1,8 +1,8 @@
 //! Video encoding from processed frames.
 //!
 //! Supports two backends:
-//! - **GStreamer** (feature: video-gstreamer): MP4/H.264 output
-//! - **GIF fallback** (no feature): Animated GIF
+//! - **Pure-Rust AV1** (default): rav1e + hand-written MP4 muxer
+//! - **GStreamer** (feature: video-gstreamer): optional legacy MP4/H.264
 
 use crate::video_enhanced::{statistics::DatasetStatistics, EnhancedVideoResult, ProcessedFrame, ProcessingStats, SonarProcessingParams};
 use std::path::Path;

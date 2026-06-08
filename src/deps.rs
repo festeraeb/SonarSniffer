@@ -1,4 +1,4 @@
-// Runtime dependency preflight — GStreamer is mandatory (not bundled in the installer).
+// Runtime dependency preflight — WebView2 on Windows; GStreamer optional (legacy H.264 only).
 
 use serde::{Deserialize, Serialize};
 use std::process::Command;
@@ -243,7 +243,7 @@ pub fn check_gstreamer() -> DependencyStatus {
     DependencyStatus {
         gstreamer_available: false,
         gstreamer_version: None,
-        message: "GStreamer is required for SonarSniffer (video export). Install the MSVC x86_64 runtime.".into(),
+        message: "GStreamer not installed (optional — built-in AV1 encoder is used by default).".into(),
     }
 }
 
@@ -284,8 +284,8 @@ fn gstreamer_item() -> DependencyItem {
 
     DependencyItem {
         id: "gstreamer".into(),
-        name: "GStreamer 1.x (MSVC x86_64 on Windows)".into(),
-        required: true,
+        name: "GStreamer 1.x (optional legacy H.264)".into(),
+        required: false,
         satisfied: gst.gstreamer_available,
         version: gst.gstreamer_version,
         message: gst.message,
@@ -342,7 +342,10 @@ fn webview2_item() -> DependencyItem {
 }
 
 pub fn preflight_report() -> PreflightReport {
-    let items = vec![gstreamer_item(), webview2_item()];
+    let mut items = vec![webview2_item()];
+    if cfg!(feature = "video-gstreamer") {
+        items.insert(0, gstreamer_item());
+    }
     let ready = items.iter().filter(|i| i.required).all(|i| i.satisfied);
     let summary = if ready {
         "All required dependencies are installed.".into()
@@ -360,7 +363,7 @@ pub fn preflight_report() -> PreflightReport {
     PreflightReport {
         platform: platform_id().into(),
         ready,
-        gstreamer_required: true,
+        gstreamer_required: cfg!(feature = "video-gstreamer"),
         items,
         summary,
     }

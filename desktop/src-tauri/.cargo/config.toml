@@ -1,2 +1,3 @@
+# Use a local target dir so Linux/Windows CI and dev builds don't share a hardcoded path.
 [build]
-target-dir = "C:/Users/thomf/AppData/Local/cargo-target-sonarsniffer-tauri"
+target-dir = "target"

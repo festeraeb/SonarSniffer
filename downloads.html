@@ -44,30 +44,47 @@
 
   <div class="content">
     <div class="card">
-      <h2>Download <span class="version">v0.77.5</span></h2>
-      <p>Pre-built CLI binaries for Windows and macOS. Includes <code>sonarsniffer-cli</code> (full pipeline) and <code>parse_cli</code> (quick file inspector).</p>
-      <br>
-      <a class="dl-btn" href="https://github.com/festeraeb/SonarSniffer/releases/latest/download/SonarSniffer-Windows-x64.zip">⬇ Windows x64</a>
-      <a class="dl-btn mac" href="https://github.com/festeraeb/SonarSniffer/releases/latest/download/SonarSniffer-macOS-x64.zip">⬇ macOS x64</a>
+      <h2>Download <span class="version">latest release</span></h2>
+      <p>Artifacts are on <a href="https://github.com/festeraeb/SonarSniffer/releases/latest">GitHub Releases</a>. Video export uses a <strong>built-in AV1 encoder</strong> — no GStreamer required.</p>
+
+      <h3>CLI (command line)</h3>
+      <a class="dl-btn" href="https://github.com/festeraeb/SonarSniffer/releases/latest/download/SonarSniffer-Windows-CLI-x64.zip">⬇ Windows CLI</a>
+      <a class="dl-btn mac" href="https://github.com/festeraeb/SonarSniffer/releases/latest/download/SonarSniffer-macOS-CLI-x64.zip">⬇ macOS CLI</a>
+      <p style="margin-top:10px;font-size:0.85rem;color:#5a6c7d;">Includes <code>sonarsniffer-cli</code>, <code>parse_cli</code>, and UI assets.</p>
+
+      <h3>Desktop app</h3>
+      <ul>
+        <li><strong>Windows:</strong> <code>SonarSniffer-Setup.exe</code> (recommended) or <code>SonarSniffer_*.msi</code> from the release page</li>
+        <li><strong>macOS:</strong> <code>SonarSniffer_*.dmg</code> from the release page</li>
+      </ul>
     </div>
 
     <div class="card">
       <h2>Installation</h2>
 
-      <h3>Windows</h3>
+      <h3>Windows — CLI</h3>
       <ul>
-        <li>Extract the ZIP to a folder (e.g. <code>C:\SonarSniffer\</code>)</li>
-        <li>Install <strong>GStreamer MSVC 64-bit runtime</strong> from <a href="https://gstreamer.freedesktop.org/download/">gstreamer.freedesktop.org</a> (required for video export)</li>
-        <li>Add <code>C:\gstreamer\1.0\msvc_x86_64\bin</code> to your system PATH</li>
-        <li>Open a terminal in the SonarSniffer folder and run commands below</li>
+        <li>Download <code>SonarSniffer-Windows-CLI-x64.zip</code> and extract (e.g. <code>C:\SonarSniffer\</code>)</li>
+        <li>Run <code>sonarsniffer-cli.exe</code> or <code>parse_cli.exe</code> from that folder</li>
       </ul>
 
-      <h3>macOS</h3>
+      <h3>Windows — Desktop</h3>
       <ul>
-        <li>Extract: <code>unzip SonarSniffer-macOS-x64.zip -d ~/SonarSniffer</code></li>
-        <li>Install GStreamer: <code>brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad</code></li>
+        <li>Run <code>SonarSniffer-Setup.exe</code> as Administrator (installs WebView2 if needed, MSI, and CLIs)</li>
+        <li>Or install <code>SonarSniffer_*.msi</code> directly — requires <a href="https://developer.microsoft.com/microsoft-edge/webview2/">WebView2</a></li>
+      </ul>
+
+      <h3>macOS — CLI</h3>
+      <ul>
+        <li>Extract: <code>unzip SonarSniffer-macOS-CLI-x64.zip -d ~/SonarSniffer</code></li>
         <li>Make executable: <code>chmod +x ~/SonarSniffer/sonarsniffer-cli ~/SonarSniffer/parse_cli</code></li>
         <li>First run: System Settings → Privacy & Security → Allow</li>
+      </ul>
+
+      <h3>macOS — Desktop</h3>
+      <ul>
+        <li>Open the <code>.dmg</code>, drag SonarSniffer to Applications</li>
+        <li>If blocked: right-click the app → Open</li>
       </ul>
     </div>
 
@@ -86,7 +103,7 @@
       <h3>All options</h3>
       <pre>sonarsniffer-cli &lt;INPUT&gt; [OPTIONS]
 
-  --video           Export enhanced GStreamer video
+  --video           Export enhanced AV1/MP4 video
   --mosaic          Generate geo-referenced mosaic PNGs
   --curvelet        Apply curvelet denoising
   --soundtiles      Run SoundTiles feature alignment

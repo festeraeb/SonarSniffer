@@ -1,7 +1,8 @@
 /target
 /desktop/src-tauri/target
-/desktop/src-tauri/binaries/*.exe
-/desktop/src-tauri/binaries/*.dmg
+/desktop/src-tauri/binaries/*
+/desktop/src-tauri/C:/
+/desktop/src-tauri/gen/
 /test_files/
 *.rsd
 *.RSD

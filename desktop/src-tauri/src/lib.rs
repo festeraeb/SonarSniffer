@@ -18,6 +18,7 @@ pub mod outputs;
 pub mod probing;
 mod static_server;
 mod target_detection;
+mod mp4_av1;
 mod video;
 mod video_enhanced;
 pub mod xtf_parser;
@@ -33,14 +34,12 @@ use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 use video::VideoExportResult;
 
-/// Expected video filename — MP4 when GStreamer is compiled in, GIF otherwise.
-/// The actual file produced may differ (GStreamer can fall back to GIF at runtime);
-/// the authoritative path comes from the `video-complete` event.
+/// Expected video filename — MP4 (AV1 default, or legacy GStreamer H.264 when enabled).
 fn video_filename() -> &'static str {
     if cfg!(feature = "video-gstreamer") {
         "sonar_waterfall_enhanced.mp4"
     } else {
-        "sonar_waterfall.gif"
+        "sonar_waterfall.mp4"
     }
 }
 
@@ -105,7 +104,7 @@ fn setup_bundled_gstreamer() {
         deps::ensure_windows_gstreamer_environment();
         return;
     }
-    eprintln!("[gstreamer] GStreamer not found — video will fall back to GIF");
+    eprintln!("[gstreamer] GStreamer not found — legacy H.264 path unavailable (AV1 encoder is default)");
     deps::ensure_windows_gstreamer_environment();
 }
 
@@ -357,7 +356,7 @@ async fn run_sonar_pipeline(
     let pre = deps::preflight_report();
     if !pre.ready {
         return Err(format!(
-            "{}\n\nInstall GStreamer and WebView2 from the Dependencies panel, then Re-check.",
+            "{}\n\nInstall required components from the Dependencies panel, then Re-check.",
             pre.summary
         ));
     }
@@ -1057,6 +1056,7 @@ fn run_soundtiles_inline(
     })
 }
 
+#[tauri::command]
 fn discover_channels(file_name: &str) -> Result<channel_discovery::DiscoveryResult, String> {
     let path = Path::new(file_name);
     let detected = format_detector::detect_and_parse(path);
@@ -1131,7 +1131,7 @@ fn serve_viewer(dir: String, state: tauri::State<'_, ViewerServerState>) -> Resu
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Detect and configure bundled GStreamer DLLs before anything else
+    #[cfg(feature = "video-gstreamer")]
     setup_bundled_gstreamer();
 
     tauri::Builder::default()
