@@ -39,9 +39,13 @@ jobs:
       - name: Stage sidecars
         shell: pwsh
         run: ./scripts/stage_tauri_sidecars.ps1
-      - name: Build desktop MSI + NSIS
+      - name: Build desktop NSIS (primary installer)
         working-directory: desktop/src-tauri
-        run: cargo tauri build --bundles msi,nsis
+        run: cargo tauri build --verbose --bundles nsis
+      - name: Build desktop MSI (optional; WiX can fail on long paths/ICE)
+        working-directory: desktop/src-tauri
+        continue-on-error: true
+        run: cargo tauri build --verbose --bundles msi
       - name: Pack SonarSniffer-Setup.exe
         shell: pwsh
         run: ./scripts/pack_sonarsniffer_windows_setup.ps1
@@ -79,6 +83,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify vendored nauticuvs (path dep, not crates.io)
+        run: test -f nauticuvs/Cargo.toml && grep -q '../../nauticuvs' desktop/src-tauri/Cargo.toml
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0" --locked

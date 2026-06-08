@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod cerulean_parser;
 pub mod channel_alignment;
 pub mod channel_discovery;
