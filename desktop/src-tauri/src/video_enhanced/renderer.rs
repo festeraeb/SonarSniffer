@@ -4,9 +4,7 @@
 //! - **Pure-Rust AV1** (default): rav1e + hand-written MP4 muxer
 //! - **GStreamer** (feature: video-gstreamer): optional legacy MP4/H.264
 
-use crate::video_enhanced::{
-    DatasetStatistics, EnhancedVideoResult, ProcessedFrame, ProcessingStats, SonarProcessingParams,
-};
+use crate::video_enhanced::{statistics::DatasetStatistics, EnhancedVideoResult, ProcessedFrame, ProcessingStats, SonarProcessingParams};
 use std::path::Path;
 
 #[cfg(feature = "video-gstreamer")]
@@ -14,7 +12,7 @@ pub fn encode_to_video<F>(
     frames: Vec<ProcessedFrame>,
     output_dir: &Path,
     params: &SonarProcessingParams,
-    _stats: &DatasetStatistics,
+    stats: &DatasetStatistics,
     on_progress: F,
 ) -> anyhow::Result<EnhancedVideoResult>
 where
@@ -179,29 +177,34 @@ where
     let file_mb = std::fs::metadata(&mp4_path)
         .map(|m| m.len() as f64 / 1_048_576.0)
         .unwrap_or(0.0);
+
+    let gap_count = stats.gaps.len();
+    let histogram_total: u32 = stats.histogram.iter().copied().sum();
+    let percentile_span = (stats.percentile_ceiling - stats.percentile_floor).max(1.0);
+    let processed_mean = ((stats.raw_mean - stats.percentile_floor) / percentile_span).clamp(0.0, 1.0);
     
     Ok(EnhancedVideoResult {
         success: true,
         output_path: Some(mp4_path.display().to_string()),
         status: format!(
-            "Enhanced video export complete: {} frames, {}x{} @ {}fps ({:.1} MB)",
-            n_frames, width, height, fps, file_mb
+            "Enhanced video export complete: {} frames, {}x{} @ {}fps ({:.1} MB), gaps={}, stdev={:.1}, histogram_samples={}",
+            n_frames, width, height, fps, file_mb, gap_count, stats.raw_stddev, histogram_total
         ),
         processing_stats: Some(ProcessingStats {
-            total_pings: (n_frames * height) as usize,
+            total_pings: stats.total_pings,
             frames_generated: n_frames,
-            primary_channel: 0,
+            primary_channel: stats.primary_channel,
             video_width: width,
             video_height: height,
             fps,
             duration_secs: n_frames as f32 / fps as f32,
             file_size_mb: file_mb,
-            raw_min: 0.0,
-            raw_max: 0.0,
-            raw_mean: 0.0,
+            raw_min: stats.raw_min,
+            raw_max: stats.raw_max,
+            raw_mean: stats.raw_mean,
             processed_min: 0.0,
             processed_max: 1.0,
-            processed_mean: 0.5,
+            processed_mean,
             tvg_applied: true,
             log_compression_applied: true,
             filtering_applied: true,
@@ -222,6 +225,10 @@ pub fn encode_to_video<F>(
 where
     F: Fn(u32, u32) + Send + 'static,
 {
+    // Pure-Rust AV1 (rav1e) → hand-written MP4 muxer. No system libs, no NASM,
+    // no pkg-config — the default build path that never flakes CI. Output is a
+    // standards-compliant .mp4 that plays in browsers, VLC, mpv, and the
+    // Tauri desktop webview.
     use crate::mp4_av1::{write_mp4, Av1Packet};
     use rav1e::prelude::*;
 
@@ -239,6 +246,8 @@ where
     let n_frames = frames.len() as u32;
     let fps = params.fps.max(1);
 
+    // rav1e encoder config: 8-bit 4:2:0, speed preset tuned for snappy encode of
+    // low-motion sonar waterfall content. Keyframe interval keeps seeking fast.
     let enc = EncoderConfig {
         width,
         height,
@@ -259,6 +268,7 @@ where
     let chroma_w = width.div_ceil(2);
     let chroma_h = height.div_ceil(2);
 
+    // Feed frames: RGB → BT.601 YUV420 planar.
     for (i, frame) in frames.iter().enumerate() {
         let mut f = ctx.new_frame();
         rgb_to_yuv420_into(&frame.pixels, width, height, chroma_w, chroma_h, &mut f);
@@ -268,15 +278,13 @@ where
     }
     ctx.flush();
 
+    // Drain encoded packets.
     let mut packets: Vec<Av1Packet> = Vec::with_capacity(frames.len());
     loop {
         match ctx.receive_packet() {
             Ok(pkt) => {
                 let is_key = matches!(pkt.frame_type, FrameType::KEY);
-                packets.push(Av1Packet {
-                    data: pkt.data,
-                    is_key,
-                });
+                packets.push(Av1Packet { data: pkt.data, is_key });
             }
             Err(EncoderStatus::Encoded) => continue,
             Err(EncoderStatus::LimitReached) => break,
@@ -296,6 +304,7 @@ where
 
     let mp4_path = output_dir.join("sonar_waterfall.mp4");
     let mut file = std::fs::File::create(&mp4_path)?;
+    // seq_level_idx 8 (≈ level 4.0) covers typical waterfall sizes safely.
     write_mp4(&mut file, &packets, width as u32, height as u32, fps, 8)?;
     {
         use std::io::Write as _;
@@ -318,14 +327,7 @@ where
         output_path: Some(mp4_path.display().to_string()),
         status: format!(
             "Pure-Rust AV1/MP4 export complete: {} frames, {}x{} @ {}fps ({:.1} MB), gaps={}, stdev={:.1}, histogram_samples={}",
-            n_frames,
-            width,
-            height,
-            fps,
-            file_mb,
-            gap_count,
-            stats.raw_stddev,
-            histogram_total
+            n_frames, width, height, fps, file_mb, gap_count, stats.raw_stddev, histogram_total
         ),
         processing_stats: Some(ProcessingStats {
             total_pings: stats.total_pings,
@@ -351,6 +353,8 @@ where
     })
 }
 
+/// Convert an RGB8 frame to BT.601 limited-range YUV420 planar, writing directly
+/// into a rav1e frame's three planes.
 #[cfg(not(feature = "video-gstreamer"))]
 fn rgb_to_yuv420_into(
     rgb: &[u8],
@@ -360,6 +364,7 @@ fn rgb_to_yuv420_into(
     chroma_h: usize,
     frame: &mut rav1e::prelude::Frame<u8>,
 ) {
+    // Y plane (full res).
     {
         let y_plane = &mut frame.planes[0];
         let mut rows = y_plane.mut_slice(Default::default());
@@ -371,11 +376,14 @@ fn rgb_to_yuv420_into(
                 let r = rgb[idx] as f32;
                 let g = rgb[idx + 1] as f32;
                 let b = rgb[idx + 2] as f32;
+                // BT.601 luma, limited range (16..235).
                 let yv = 16.0 + (0.257 * r + 0.504 * g + 0.098 * b);
                 row[x] = yv.clamp(16.0, 235.0) as u8;
             }
         }
     }
+    // U and V planes (quarter res, 2x2 average).
+    // Build U then V separately to satisfy the borrow checker.
     for plane_idx in 1..=2usize {
         let p = &mut frame.planes[plane_idx];
         let mut rows = p.mut_slice(Default::default());
@@ -383,6 +391,7 @@ fn rgb_to_yuv420_into(
         for cy in 0..chroma_h {
             let row = rows_iter.next().unwrap();
             for cx in 0..chroma_w {
+                // 2x2 source block.
                 let mut acc = 0.0f32;
                 let mut cnt = 0.0f32;
                 for dy in 0..2 {
@@ -395,8 +404,10 @@ fn rgb_to_yuv420_into(
                             let g = rgb[idx + 1] as f32;
                             let b = rgb[idx + 2] as f32;
                             let v = if plane_idx == 1 {
+                                // Cb
                                 128.0 + (-0.148 * r - 0.291 * g + 0.439 * b)
                             } else {
+                                // Cr
                                 128.0 + (0.439 * r - 0.368 * g - 0.071 * b)
                             };
                             acc += v;

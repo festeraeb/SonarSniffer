@@ -13,17 +13,37 @@ pub struct VideoExportResult {
 
 /// ParseResult entry point used by CLI/tests — uses enhanced stitched mosaic when possible.
 pub fn run_video_export(parsed: &ParseResult, output_dir: &Path) -> VideoExportResult {
-    let sidescan_pair = crate::outputs::find_sidescan_pair(parsed);
     let discovery = crate::channel_discovery::discover_and_profile(parsed);
-    let options = PipelineOptions::default();
+    let proposal = crate::channel_discovery::propose_stitch_layouts(parsed, &discovery);
+    let (pk, sk, align) =
+        crate::channel_discovery::sidescan_pair_from_layout(&proposal, None);
+    let mut options = PipelineOptions::default();
+    options.channel_alignments = align;
+    run_video_export_stitch(
+        parsed,
+        output_dir,
+        &options,
+        (pk, sk),
+        Some(&discovery),
+    )
+}
+
+/// Pipeline path — respects layout proposal, alignments, and scroll speed options.
+pub fn run_video_export_stitch(
+    parsed: &ParseResult,
+    output_dir: &Path,
+    options: &PipelineOptions,
+    sidescan_pair: (Option<u32>, Option<u32>),
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
+) -> VideoExportResult {
     run_video_export_pings(
         parsed,
         parsed.pings.clone(),
         output_dir,
         Box::new(|_, _| {}),
-        &options,
+        options,
         sidescan_pair,
-        Some(&discovery),
+        discovery,
     )
 }
 
@@ -50,13 +70,25 @@ pub fn run_video_export_pings(
         discovery,
     ) {
         let progress = move |frame: u32, total: u32| on_progress(frame, total);
-        match render_mosaic_waterfall(
-            mosaic,
-            output_dir,
-            options.video_fps,
-            options.video_height,
-            progress,
-        ) {
+        let mut vparams = SonarProcessingParams::high_quality();
+        vparams.fps = options.video_fps.max(1);
+        vparams.video_height = options.video_height.max(1);
+        vparams.video_speed_mode = options.video_speed_mode.clone();
+        vparams.video_readable_pings_per_sec = options.video_readable_pings_per_sec;
+        vparams.colormap = match options.colormap.to_lowercase().as_str() {
+            "grayscale" | "gray" | "greyscale" => Colormap::Grayscale,
+            "sonar" => Colormap::SonarCustom,
+            "plasma" => Colormap::Plasma,
+            "ocean" => Colormap::Ocean,
+            "inferno" => Colormap::Inferno,
+            "iron" => Colormap::Iron,
+            "rainbow" => Colormap::Rainbow,
+            "viridis" => Colormap::Viridis,
+            "magma" => Colormap::Magma,
+            "jet" => Colormap::Jet,
+            _ => Colormap::Amber,
+        };
+        match render_mosaic_waterfall(mosaic, output_dir, vparams, progress) {
             Ok(result) => VideoExportResult {
                 enabled: true,
                 status: result.status,
@@ -100,7 +132,10 @@ fn export_with_params_fallback(
     params.remove_water_column = options.remove_water_column;
     params.colormap = colormap;
     params.video_height = options.video_height;
-    params.fps = options.video_fps;
+    params.fps = options.video_fps.max(1);
+    params.video_height = options.video_height.max(1);
+    params.video_speed_mode = options.video_speed_mode.clone();
+    params.video_readable_pings_per_sec = options.video_readable_pings_per_sec;
     params.median_filter_enabled = true;
     params.median_kernel_size = if options.curvelet_denoise { 5 } else { 3 };
     export_with_params(pings, output_dir, on_progress, params)

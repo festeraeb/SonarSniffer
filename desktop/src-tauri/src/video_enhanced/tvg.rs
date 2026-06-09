@@ -47,6 +47,7 @@ use crate::video_enhanced::SonarProcessingParams;
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum TransducerProfile {
     /// GT54 / UHD1 — 800 kHz.  High absorption due to high frequency.
     /// Typical in freshwater lakes; max sample value usually < 4096 on hardware.
@@ -67,10 +68,10 @@ impl TransducerProfile {
     /// Using too HIGH an α for GT51 causes blackout (under-brightened far range).
     pub fn absorption_db_per_m(self) -> f32 {
         match self {
-            Self::GT54_UHD1  => 0.28, // 800 kHz — strong freshwater absorption
-            Self::GT56_UHD2  => 0.11, // 455 kHz — moderate absorption
+            Self::GT54_UHD1 => 0.28,   // 800 kHz — strong freshwater absorption
+            Self::GT56_UHD2 => 0.11,   // 455 kHz — moderate absorption
             Self::GT51_Legacy => 0.08, // 260 kHz — low absorption
-            Self::Unknown     => 0.10, // safe middle ground
+            Self::Unknown => 0.10,     // safe middle ground
         }
     }
 
@@ -80,10 +81,10 @@ impl TransducerProfile {
     /// higher exponent than deep-water spherical spreading (GT51).
     pub fn spreading_factor(self) -> f32 {
         match self {
-            Self::GT54_UHD1   => 25.0, // near-field cylindrical + spherical transition
-            Self::GT56_UHD2   => 20.0, // standard spherical
-            Self::GT51_Legacy  => 18.0, // deep-water — slightly sub-spherical
-            Self::Unknown      => 20.0,
+            Self::GT54_UHD1 => 25.0,   // near-field cylindrical + spherical transition
+            Self::GT56_UHD2 => 20.0,   // standard spherical
+            Self::GT51_Legacy => 18.0, // deep-water — slightly sub-spherical
+            Self::Unknown => 20.0,
         }
     }
 
@@ -92,12 +93,15 @@ impl TransducerProfile {
     /// `entropy_tier_is_detail`: true when Shannon entropy > 5.2 (UHD/CHIRP).
     /// `max_sample_value`: observed max u16 in a representative ping window.
     pub fn from_signal(entropy_tier_is_detail: bool, max_sample_value: u16) -> Self {
+        if max_sample_value == 0 {
+            return Self::Unknown;
+        }
         if entropy_tier_is_detail && max_sample_value < 4096 {
-            Self::GT54_UHD1   // high entropy, 12-bit range → GT54 UHD1 fingerprint
+            Self::GT54_UHD1 // high entropy, 12-bit range → GT54 UHD1 fingerprint
         } else if entropy_tier_is_detail {
-            Self::GT56_UHD2   // high entropy, full 16-bit range → GT56 UHD2
+            Self::GT56_UHD2 // high entropy, full 16-bit range → GT56 UHD2
         } else {
-            Self::GT51_Legacy  // low entropy → Legacy/Gen1/GT51
+            Self::GT51_Legacy // low entropy → Legacy/Gen1/GT51
         }
     }
 }
@@ -115,16 +119,16 @@ pub fn apply_tvg_correction(samples: &[u16], params: &SonarProcessingParams) -> 
         // No correction: just convert to f32
         return samples.iter().map(|&s| s as f32).collect();
     }
-    
+
     let n = samples.len();
     let mut corrected = Vec::with_capacity(n);
-    
+
     let spreading_factor = params.tvg_spreading_factor;
     let absorption_db_per_m = params.tvg_absorption_db_per_m;
     let start_sample = params.tvg_start_sample;
     let sound_speed = params.sound_speed_m_per_s;
     let sample_rate = params.sample_rate_hz;
-    
+
     for (i, &sample) in samples.iter().enumerate() {
         let value = if i < start_sample {
             // Skip near-field (no TVG correction)
@@ -140,24 +144,24 @@ pub fn apply_tvg_correction(samples: &[u16], params: &SonarProcessingParams) -> 
                 // Assume ~1 sample per meter (rough approximation)
                 i as f32
             };
-            
+
             // Avoid division by zero or negative range
             let range_m = range_m.max(1.0);
-            
+
             // Geometric spreading correction: I × r^(spreading_factor/10)
             let spreading_gain = range_m.powf(spreading_factor / 10.0);
-            
+
             // Absorption correction: I × 10^(α×r/10)
             let absorption_gain = 10.0_f32.powf((absorption_db_per_m * range_m) / 10.0);
-            
+
             // Apply combined TVG
             let tvg_gain = spreading_gain * absorption_gain;
             sample as f32 * tvg_gain
         };
-        
+
         corrected.push(value);
     }
-    
+
     corrected
 }
 
@@ -168,15 +172,15 @@ pub fn precompute_tvg_lut(max_samples: usize, params: &SonarProcessingParams) ->
     if !params.tvg_enabled {
         return vec![1.0; max_samples];
     }
-    
+
     let spreading_factor = params.tvg_spreading_factor;
     let absorption_db_per_m = params.tvg_absorption_db_per_m;
     let start_sample = params.tvg_start_sample;
     let sound_speed = params.sound_speed_m_per_s;
     let sample_rate = params.sample_rate_hz;
-    
+
     let mut lut = Vec::with_capacity(max_samples);
-    
+
     for i in 0..max_samples {
         let gain = if i < start_sample {
             1.0
@@ -188,14 +192,14 @@ pub fn precompute_tvg_lut(max_samples: usize, params: &SonarProcessingParams) ->
                 i as f32
             };
             let range_m = range_m.max(1.0);
-            
+
             let spreading_gain = range_m.powf(spreading_factor / 10.0);
             let absorption_gain = 10.0_f32.powf((absorption_db_per_m * range_m) / 10.0);
             spreading_gain * absorption_gain
         };
         lut.push(gain);
     }
-    
+
     lut
 }
 
@@ -242,7 +246,7 @@ pub fn apply_tvg_lut(samples: &[u16], lut: &[f32]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_tvg_disabled() {
         let samples = vec![100u16, 200, 300];
@@ -251,13 +255,13 @@ mod tests {
             ..Default::default()
         };
         let corrected = apply_tvg_correction(&samples, &params);
-        
+
         assert_eq!(corrected.len(), 3);
         assert_eq!(corrected[0], 100.0);
         assert_eq!(corrected[1], 200.0);
         assert_eq!(corrected[2], 300.0);
     }
-    
+
     #[test]
     fn test_tvg_increases_with_range() {
         let samples = vec![100u16; 100];
@@ -269,17 +273,17 @@ mod tests {
             ..Default::default()
         };
         let corrected = apply_tvg_correction(&samples, &params);
-        
+
         // Near-field unchanged
         assert_eq!(corrected[0], 100.0);
         assert_eq!(corrected[4], 100.0);
-        
+
         // Far-field should increase (compensating for loss)
         assert!(corrected[10] > corrected[5]);
         assert!(corrected[50] > corrected[10]);
         assert!(corrected[99] > corrected[50]);
     }
-    
+
     #[test]
     fn test_tvg_lut_matches_direct() {
         let samples = vec![100u16, 200, 300, 400];
@@ -288,11 +292,11 @@ mod tests {
             tvg_spreading_factor: 20.0,
             ..Default::default()
         };
-        
+
         let direct = apply_tvg_correction(&samples, &params);
         let lut = precompute_tvg_lut(samples.len(), &params);
         let from_lut = apply_tvg_lut(&samples, &lut);
-        
+
         for (d, l) in direct.iter().zip(from_lut.iter()) {
             assert!((d - l).abs() < 0.01, "Direct: {}, LUT: {}", d, l);
         }

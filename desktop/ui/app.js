@@ -7,6 +7,8 @@ const state = {
   license: null,
   preflight: null,
   lastOutputDir: null,
+  pendingLayoutRun: null,
+  selectedLayoutId: null,
   unlistenProgress: null,
   unlistenVideo: null,
   unlistenVideoComplete: null,
@@ -256,7 +258,73 @@ async function browseFolder() {
   }
 }
 
-async function runPipeline() {
+function buildPipelineOptions(outDir, stitchLayoutId = null) {
+  const selectedMap = document.querySelector(".swatch.selected")?.dataset?.map || "amber";
+  const opts = {
+    outputDir: outDir,
+    video: Boolean(document.getElementById("enableVideo")?.checked),
+    mosaic: Boolean(document.getElementById("enableMosaic")?.checked),
+    curveletDenoise: Boolean(document.getElementById("enableCurvelet")?.checked),
+    colormap: selectedMap,
+    videoSpeedMode: document.getElementById("videoSpeedMode")?.value || "readable",
+    waterfall: true,
+    kml: true,
+    kmz: true,
+    mbtiles: true,
+    arcgis: true,
+    webViewer: true,
+  };
+  if (stitchLayoutId) opts.stitchLayoutId = stitchLayoutId;
+  return opts;
+}
+
+function hideLayoutPicker() {
+  document.getElementById("layoutPicker")?.classList.add("hidden");
+  state.pendingLayoutRun = null;
+  state.selectedLayoutId = null;
+}
+
+function showLayoutPicker(proposal, fileName, outDir) {
+  const panel = document.getElementById("layoutPicker");
+  const list = document.getElementById("layoutCandidates");
+  const hint = document.getElementById("layoutPickerHint");
+  const confirmBtn = document.getElementById("confirmLayoutBtn");
+  if (!panel || !list || !proposal?.candidates?.length) return false;
+
+  state.pendingLayoutRun = { fileName, outDir, proposal };
+  state.selectedLayoutId = proposal.recommendedId || proposal.candidates[0]?.id;
+  if (hint) {
+    hint.textContent = `Auto confidence ${Math.round((proposal.autoConfidence || 0) * 100)}% — confirm the stitch layout before mosaic and video.`;
+  }
+
+  list.innerHTML = "";
+  for (const c of proposal.candidates) {
+    const card = document.createElement("label");
+    card.className = "layout-card";
+    const pct = Math.round((c.confidence || 0) * 100);
+    const warn = (c.warnings || []).join("; ");
+    card.innerHTML = `
+      <input type="radio" name="layoutPick" value="${c.id}" ${c.id === state.selectedLayoutId ? "checked" : ""}>
+      <div>
+        <strong>${c.label}</strong>
+        <span class="muted small"> · ${pct}% confidence</span>
+        ${warn ? `<div class="muted small">${warn}</div>` : ""}
+      </div>`;
+    card.querySelector("input")?.addEventListener("change", (e) => {
+      state.selectedLayoutId = e.target.value;
+      if (confirmBtn) confirmBtn.disabled = !state.selectedLayoutId;
+    });
+    list.appendChild(card);
+  }
+
+  if (confirmBtn) confirmBtn.disabled = !state.selectedLayoutId;
+  panel.classList.remove("hidden");
+  setProgress("Layout confirmation required", 0);
+  setConsole("pipelineOutput", "Pick a sidescan layout, then click Build with selected layout.");
+  return true;
+}
+
+async function runPipeline(stitchLayoutId = null) {
   if (!state.preflight?.ready) {
     setConsole("pipelineOutput", "Install required dependencies first (GStreamer + WebView2 on Windows).");
     return;
@@ -272,22 +340,10 @@ async function runPipeline() {
     return;
   }
 
-  const selectedMap = document.querySelector(".swatch.selected")?.dataset?.map || "amber";
-  const options = {
-    outputDir: outDir,
-    video: Boolean(document.getElementById("enableVideo")?.checked),
-    mosaic: Boolean(document.getElementById("enableMosaic")?.checked),
-    curveletDenoise: Boolean(document.getElementById("enableCurvelet")?.checked),
-    colormap: selectedMap,
-    waterfall: true,
-    kml: true,
-    kmz: true,
-    mbtiles: true,
-    arcgis: true,
-    webViewer: true,
-  };
+  const options = buildPipelineOptions(outDir, stitchLayoutId);
 
   hideCompleteLink();
+  if (!stitchLayoutId) hideLayoutPicker();
   showProgress(true);
   setProgress("Starting pipeline…", 0);
   setConsole("pipelineOutput", "Running SonarSniffer pipeline…");
@@ -295,8 +351,14 @@ async function runPipeline() {
 
   try {
     const result = await invoke("run_sonar_pipeline", { fileName, options });
+    if (result?.layoutConfirmationRequired && result?.stitchLayout) {
+      showLayoutPicker(result.stitchLayout, fileName, outDir);
+      setConsole("pipelineOutput", prettyJson(result));
+      return;
+    }
     const outputDir = result?.outputs?.outputDir || result?.outputs?.output_dir;
     state.lastOutputDir = outputDir || null;
+    hideLayoutPicker();
     setProgress(result?.videoRendering ? "Video rendering in background…" : "Complete", 100);
     setConsole("pipelineOutput", prettyJson(result));
     if (outputDir) {
@@ -308,6 +370,11 @@ async function runPipeline() {
   }
 }
 
+async function confirmLayoutAndRun() {
+  if (!state.pendingLayoutRun || !state.selectedLayoutId) return;
+  await runPipeline(state.selectedLayoutId);
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("activateLicenseBtn")?.addEventListener("click", activateLicense);
   document.getElementById("refreshDepsBtn")?.addEventListener("click", refreshDependencies);
@@ -316,7 +383,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("installAllDepsBtnInline")?.addEventListener("click", installAll);
   document.getElementById("browsePipelineBtn")?.addEventListener("click", () => browseInput("pipelineInput"));
   document.getElementById("browseFolderBtn")?.addEventListener("click", browseFolder);
-  document.getElementById("runPipelineBtn")?.addEventListener("click", runPipeline);
+  document.getElementById("runPipelineBtn")?.addEventListener("click", () => runPipeline());
+  document.getElementById("confirmLayoutBtn")?.addEventListener("click", confirmLayoutAndRun);
 
   document.getElementById("colormapSwatches")?.addEventListener("click", (e) => {
     const btn = e.target.closest(".swatch");

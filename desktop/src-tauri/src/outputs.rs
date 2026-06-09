@@ -1,19 +1,36 @@
+use crate::channel_discovery::SpatialRole;
+use crate::egn::{apply_egn, beam_profile_from_pings, BeamProfile};
 use crate::garmin_rsd_parser::{ParseResult, Ping};
 use crate::target_detection::DetectionSummary;
 use crate::video_enhanced::tvg;
-use crate::egn::{beam_profile_from_pings, apply_egn, BeamProfile};
-use crate::channel_discovery::SpatialRole;
 use anyhow::{Context, Result};
 use image::codecs::png::PngEncoder;
-use image::{ColorType, GrayImage, ImageBuffer, ImageEncoder, Rgb, Rgba, RgbImage};
+use image::{ColorType, GrayImage, ImageBuffer, ImageEncoder, Rgb, RgbImage, Rgba};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
 use zip::write::SimpleFileOptions;
-use tauri::Emitter;
+
+/// Google Earth ground-overlay strip size (low values look blurry when draped).
+const KMZ_OVERLAY_WIDTH: u32 = 1024;
+const KMZ_OVERLAY_MAX_HEIGHT: u32 = 512;
+
+/// Progress callback for pipeline stages. Receives (step_description, percent_complete).
+/// When running under Tauri, this emits events to the frontend.
+/// When running headless/CLI, this can be a no-op or print to stderr.
+pub type ProgressCallback = dyn Fn(&str, u8);
+
+/// Helper to emit progress if a callback is provided.
+#[inline]
+fn emit_progress(cb: Option<&ProgressCallback>, step: &str, pct: u8) {
+    if let Some(f) = cb {
+        f(step, pct);
+    }
+}
 
 #[derive(Clone, serde::Serialize)]
 struct PipelineProgress {
@@ -29,9 +46,15 @@ pub struct OutputArtifact {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OutputSummary {
     pub output_dir: String,
     pub artifacts: Vec<OutputArtifact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stitch_layout: Option<crate::channel_discovery::StitchLayoutProposal>,
+    pub layout_confirmation_required: bool,
+    pub resolved_sidescan_pair: (Option<u32>, Option<u32>),
+    pub resolved_alignments: Vec<crate::channel_alignment::ChannelAlignment>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -97,6 +120,17 @@ pub struct PipelineOptions {
     /// Per-channel alignment overrides (flip / invert). If empty, auto-detect is used.
     #[serde(default)]
     pub channel_alignments: Vec<crate::channel_alignment::ChannelAlignment>,
+    /// User-selected layout from `stitch_layout` proposal (`propose_stitch_layouts`).
+    #[serde(default)]
+    pub stitch_layout_id: Option<String>,
+    /// Video scroll speed: `readable` (~2 pings/s) or `survey` (match file ping rate).
+    #[serde(default = "default_video_speed_mode")]
+    pub video_speed_mode: String,
+    #[serde(default = "default_video_readable_pps")]
+    pub video_readable_pings_per_sec: f32,
+    /// Highlight extra sonar payload bytes in magenta on waterfall PNGs (debug only).
+    #[serde(default)]
+    pub show_payload_debug_overlay: bool,
     // ── Curvelet denoising ────────────────────────────────────────────────
     /// Nadir (center-gap) handling for the stitched sidescan mosaic.
     /// "stitch" = close the gap, "fill" = paint with downscan if available, "raw" = leave transparent.
@@ -123,16 +157,42 @@ pub struct PipelineOptions {
     pub curvelet_threshold: f32,
 }
 
-fn default_nadir_mode() -> String { "stitch".to_string() }
-fn default_video_height() -> u32 { 1080 }
-fn default_video_fps() -> u32 { 6 }
-fn default_curvelet_threshold() -> f32 { 0.05 }
-fn default_unit_system() -> String { "imperial".to_string() }
-fn default_detection_min_size() -> u32 { 4 }
-fn default_detection_max_size() -> u32 { 500_000 }
-fn default_detection_sensitivity() -> f32 { 3.0 }
-fn default_true() -> bool { true }
-fn default_soundtiles_tiles() -> usize { 20 }
+fn default_nadir_mode() -> String {
+    "stitch".to_string()
+}
+fn default_video_height() -> u32 {
+    1080
+}
+fn default_video_fps() -> u32 {
+    24
+}
+fn default_video_speed_mode() -> String {
+    "readable".to_string()
+}
+fn default_video_readable_pps() -> f32 {
+    2.0
+}
+fn default_curvelet_threshold() -> f32 {
+    0.05
+}
+fn default_unit_system() -> String {
+    "imperial".to_string()
+}
+fn default_detection_min_size() -> u32 {
+    4
+}
+fn default_detection_max_size() -> u32 {
+    500_000
+}
+fn default_detection_sensitivity() -> f32 {
+    3.0
+}
+fn default_true() -> bool {
+    true
+}
+fn default_soundtiles_tiles() -> usize {
+    20
+}
 
 impl Default for PipelineOptions {
     fn default() -> Self {
@@ -150,7 +210,10 @@ impl Default for PipelineOptions {
             colormap: "amber".to_string(),
             remove_water_column: false,
             video_height: 1080,
-            video_fps: 6,
+            video_fps: 24,
+            stitch_layout_id: None,
+            video_speed_mode: default_video_speed_mode(),
+            video_readable_pings_per_sec: default_video_readable_pps(),
             overlay_depth: false,
             overlay_temperature: false,
             overlay_gps: false,
@@ -165,6 +228,7 @@ impl Default for PipelineOptions {
             detection_sensitivity: 3.0,
             detection_clutter: 0.0,
             channel_alignments: Vec::new(),
+            show_payload_debug_overlay: false,
             nadir_mode: "stitch".to_string(),
             soundtiles: false,
             soundtiles_tiles: 20,
@@ -176,7 +240,13 @@ impl Default for PipelineOptions {
 }
 
 /// Build all requested output artifacts for a parsed file.
-pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &PipelineOptions, detections: Option<&DetectionSummary>, app: Option<tauri::AppHandle>) -> Result<OutputSummary> {
+pub fn build_outputs(
+    input_file: &Path,
+    parsed: &ParseResult,
+    options: &PipelineOptions,
+    detections: Option<&DetectionSummary>,
+    progress: Option<&ProgressCallback>,
+) -> Result<OutputSummary> {
     let parent = input_file
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
@@ -204,26 +274,28 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
     // ── Pre-compute expensive results shared by multiple output writers ──
     // The sigma filter takes 4-7s per channel; compute once when both
     // waterfall + mosaic need denoised images from the same gray data.
-    let denoised_cache: BTreeMap<u32, GrayImage> = if options.waterfall && options.mosaic && options.curvelet_denoise {
-        if let Some(a) = &app { let _ = a.emit("pipeline-progress", PipelineProgress { step: "Denoising channels...".into(), pct: 62 }); }
-        let channels = pings_by_channel(parsed);
-        channels.iter()
-            .map(|(ch, pings)| {
-                let raw = render_gray(pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
-                let (denoised, _) = curvelet_denoise_gray_image_tagged(raw, options.curvelet_threshold, &format!("ch{ch}"));
-                (*ch, denoised)
-            })
-            .collect()
-    } else {
-        BTreeMap::new()
-    };
-
-    // Channel pair scoring is O(n) over all pings; compute once for mosaic,
-    // KMZ, and viewer overlay writers that all need the same result.
-    let sidescan_pair = find_sidescan_pair(parsed);
+    let denoised_cache: BTreeMap<u32, GrayImage> =
+        if options.waterfall && options.mosaic && options.curvelet_denoise {
+            emit_progress(progress, "Denoising channels...", 62);
+            let channels = pings_by_channel(parsed);
+            channels
+                .iter()
+                .map(|(ch, pings)| {
+                    let raw = render_gray(pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
+                    let (denoised, _) = curvelet_denoise_gray_image_tagged(
+                        raw,
+                        options.curvelet_threshold,
+                        &format!("ch{ch}"),
+                    );
+                    (*ch, denoised)
+                })
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
 
     // Per-file channel discovery drives dynamic stitch orientation (nadir edge + role).
-    let needs_discovery = options.mosaic || options.kmz || options.web_viewer;
+    let needs_discovery = options.mosaic || options.kmz || options.web_viewer || options.video;
     let discovery = if needs_discovery {
         Some(crate::channel_discovery::discover_and_profile(parsed))
     } else {
@@ -231,35 +303,143 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
     };
     let discovery_ref = discovery.as_ref();
 
+    let needs_stitch = options.mosaic || options.kmz || options.web_viewer || options.video;
+    let (stitch_layout, layout_blocked, sidescan_pair, effective_alignments) =
+        if let Some(d) = discovery_ref.filter(|_| needs_stitch) {
+            let proposal = crate::channel_discovery::propose_stitch_layouts(parsed, d);
+            let blocked = proposal.needs_confirmation && options.stitch_layout_id.is_none();
+            let (pair, layout_align) = if blocked {
+                ((None, None), Vec::new())
+            } else {
+                let (pk, sk, align) = crate::channel_discovery::sidescan_pair_from_layout(
+                    &proposal,
+                    options.stitch_layout_id.as_deref(),
+                );
+                ((pk, sk), align)
+            };
+            let mut align = options.channel_alignments.clone();
+            for la in layout_align {
+                if !align.iter().any(|a| a.channel_id == la.channel_id) {
+                    align.push(la);
+                }
+            }
+            (Some(proposal), blocked, pair, align)
+        } else {
+            let pair = discovery_ref.map_or_else(
+                || find_sidescan_pair(parsed),
+                |d| {
+                    if let Some(gt51) = crate::channel_discovery::gt51_single_wing_pair(parsed, d)
+                    {
+                        gt51
+                    } else {
+                        let picked =
+                            crate::channel_discovery::best_sidescan_pair_for_stitch(parsed, d);
+                        if picked.0.is_some() {
+                            picked
+                        } else {
+                            find_sidescan_pair(parsed)
+                        }
+                    }
+                },
+            );
+            (
+                None,
+                false,
+                pair,
+                options.channel_alignments.clone(),
+            )
+        };
+
     if options.waterfall {
-        if let Some(a) = &app { let _ = a.emit("pipeline-progress", PipelineProgress { step: "Rendering Waterfall Image...".into(), pct: 65 }); }
-        artifacts.extend(write_waterfall_per_channel(parsed, &output_dir, options.curvelet_denoise, options.curvelet_threshold, &denoised_cache)?);
+        emit_progress(progress, "Rendering Waterfall Image...", 65);
+        artifacts.extend(write_waterfall_per_channel(
+            parsed,
+            &output_dir,
+            options.curvelet_denoise,
+            options.curvelet_threshold,
+            &denoised_cache,
+            options.show_payload_debug_overlay,
+        )?);
+    }
+
+    if layout_blocked {
+        if options.kml {
+            emit_progress(progress, "Generating KML...", 85);
+            let path = output_dir.join("track.kml");
+            if let Ok(n) = write_kml(parsed, &path) {
+                artifacts.push(OutputArtifact {
+                    kind: "kml".to_string(),
+                    path: path.display().to_string(),
+                    details: format!("Trackline + {n} depth placemarks (layout pick pending)"),
+                });
+            }
+        }
+        return Ok(OutputSummary {
+            output_dir: output_dir.display().to_string(),
+            artifacts,
+            stitch_layout,
+            layout_confirmation_required: true,
+            resolved_sidescan_pair: sidescan_pair,
+            resolved_alignments: effective_alignments,
+        });
     }
 
     if options.mosaic {
-        if let Some(a) = &app { let _ = a.emit("pipeline-progress", PipelineProgress { step: "Building Geographic Mosaic...".into(), pct: 75 }); }
-        artifacts.extend(write_mosaic_per_channel(parsed, &output_dir, &options.colormap, options.remove_water_column, &options.nadir_mode, options.curvelet_denoise, options.curvelet_threshold, &options.channel_alignments, &denoised_cache, sidescan_pair, discovery_ref)?);
+        emit_progress(progress, "Building Geographic Mosaic...", 75);
+        artifacts.extend(write_mosaic_per_channel(
+            parsed,
+            &output_dir,
+            &options.colormap,
+            options.remove_water_column,
+            &options.nadir_mode,
+            options.curvelet_denoise,
+            options.curvelet_threshold,
+            &effective_alignments,
+            &denoised_cache,
+            sidescan_pair,
+            discovery_ref,
+        )?);
 
         // ALWAYS write the unified cartographic mosaic image to the root output folder so the user can just open the master file!
         let mut res = 0.20;
-        let pvals = parsed.pings.iter().filter(|p| p.latitude != 0.0).collect::<Vec<_>>();
+        let pvals = parsed
+            .pings
+            .iter()
+            .filter(|p| p.latitude != 0.0)
+            .collect::<Vec<_>>();
         if !pvals.is_empty() {
-            let min_lat = pvals.iter().map(|p| p.latitude).fold(std::f64::INFINITY, f64::min);
-            let max_lat = pvals.iter().map(|p| p.latitude).fold(std::f64::NEG_INFINITY, f64::max);
-            let w_m = (pvals.iter().map(|p| p.longitude).fold(std::f64::NEG_INFINITY, f64::max) - pvals.iter().map(|p| p.longitude).fold(std::f64::INFINITY, f64::min)).abs() * 111320.0 * min_lat.to_radians().cos();
+            let min_lat = pvals
+                .iter()
+                .map(|p| p.latitude)
+                .fold(std::f64::INFINITY, f64::min);
+            let max_lat = pvals
+                .iter()
+                .map(|p| p.latitude)
+                .fold(std::f64::NEG_INFINITY, f64::max);
+            let w_m = (pvals
+                .iter()
+                .map(|p| p.longitude)
+                .fold(std::f64::NEG_INFINITY, f64::max)
+                - pvals
+                    .iter()
+                    .map(|p| p.longitude)
+                    .fold(std::f64::INFINITY, f64::min))
+            .abs()
+                * 111320.0
+                * min_lat.to_radians().cos();
             let h_m = (max_lat - min_lat).abs() * 111320.0;
             let max_dim = w_m.max(h_m);
-            if max_dim / res > 8192.0 { res = max_dim / 8192.0; }
+            if max_dim / res > 8192.0 {
+                res = max_dim / 8192.0;
+            }
         }
 
         // ── Bridge: use engine::build_mosaic (TVG + EGN + slant-range) ────────
-        // Replaces the old projection::project_pings_to_grid path which had no
-        // TVG, no histogram normalisation, and no blanking mitigation.
         let discovery_for_engine = discovery_ref.expect("discovery when mosaic enabled");
         let nadir_mode_engine = match options.nadir_mode.as_str() {
             "fill" => crate::mosaic::engine::NadirMode::Fill,
-            "raw"  => crate::mosaic::engine::NadirMode::Raw,
-            _      => crate::mosaic::engine::NadirMode::Stitch,
+            "raw" => crate::mosaic::engine::NadirMode::Raw,
+            _ => crate::mosaic::engine::NadirMode::Stitch,
         };
         let engine_config = crate::mosaic::engine::MosaicConfig {
             resolution_m: res,
@@ -271,21 +451,31 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
             histogram_normalize: true,
             remove_water_column: options.remove_water_column,
             gamma: MOSAIC_GAMMA,
-            tile_zoom_levels: vec![],           // tile pyramid built separately
+            tile_zoom_levels: vec![], // tile pyramid built separately
             output_dir: output_dir.clone(),
         };
-        let (grid, engine_log) = crate::mosaic::engine::build_mosaic(parsed, discovery_for_engine, &engine_config);
+        let (grid, engine_log) =
+            crate::mosaic::engine::build_mosaic(parsed, discovery_for_engine, &engine_config);
         for entry in &engine_log {
             eprintln!("[engine::build_mosaic] {entry}");
         }
-        let img = crate::mosaic::engine::build_image_with_gamma(&grid, &options.colormap, engine_config.gamma);
+        let img = crate::mosaic::engine::build_image_with_gamma(
+            &grid,
+            &options.colormap,
+            engine_config.gamma,
+        );
         let out_img_path = output_dir.join("mosaic_geographic.png");
         match img.save(&out_img_path) {
             Ok(_) => {
                 artifacts.push(OutputArtifact {
                     kind: "mosaic".to_string(),
                     path: out_img_path.display().to_string(),
-                    details: format!("Geographic Mosaic (engine) · {}x{} px · {:.2}m/px · TVG+EGN+SRC", img.width(), img.height(), res),
+                    details: format!(
+                        "Geographic Mosaic (engine) · {}x{} px · {:.2}m/px · TVG+EGN+SRC",
+                        img.width(),
+                        img.height(),
+                        res
+                    ),
                 });
             }
             Err(e) => {
@@ -300,11 +490,19 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
 
     if options.mbtiles {
         let path = output_dir.join("sonar.mbtiles");
-        match write_mbtiles(parsed, &path, &options.colormap, options.remove_water_column) {
+        match write_mbtiles(
+            parsed,
+            &path,
+            &options.colormap,
+            options.remove_water_column,
+        ) {
             Ok(()) => artifacts.push(OutputArtifact {
                 kind: "mbtiles".to_string(),
                 path: path.display().to_string(),
-                details: format!("MBTiles multi-zoom · {} pings · georeferenced track-following tiles", parsed.pings.len()),
+                details: format!(
+                    "MBTiles multi-zoom · {} pings · georeferenced track-following tiles",
+                    parsed.pings.len()
+                ),
             }),
             Err(e) => artifacts.push(OutputArtifact {
                 kind: "mbtiles".to_string(),
@@ -315,13 +513,16 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
     }
 
     if options.kml {
-        if let Some(a) = &app { let _ = a.emit("pipeline-progress", PipelineProgress { step: "Generating KML...".into(), pct: 85 }); }
+        emit_progress(progress, "Generating KML...", 85);
         let path = output_dir.join("track.kml");
         match write_kml(parsed, &path) {
             Ok(n) => artifacts.push(OutputArtifact {
                 kind: "kml".to_string(),
                 path: path.display().to_string(),
-                details: format!("Trackline + {} depth placemarks · styled · LookAt camera", n),
+                details: format!(
+                    "Trackline + {} depth placemarks · styled · LookAt camera",
+                    n
+                ),
             }),
             Err(e) => artifacts.push(OutputArtifact {
                 kind: "kml".to_string(),
@@ -332,17 +533,28 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
     }
 
     if options.kmz {
-        if let Some(a) = &app { let _ = a.emit("pipeline-progress", PipelineProgress { step: "Generating KMZ Map...".into(), pct: 90 }); }
+        emit_progress(progress, "Generating KMZ Map...", 90);
         let kml = output_dir.join("track.kml");
         let kml_ready = kml.exists() || write_kml(parsed, &kml).is_ok();
         if kml_ready {
             let kmz = output_dir.join("track.kmz");
-            match write_kmz(&kml, &kmz, parsed, &output_dir, &options.colormap, options.remove_water_column, &options.channel_alignments, sidescan_pair, discovery_ref) {
+            match write_kmz(
+                &kml,
+                &kmz,
+                parsed,
+                &output_dir,
+                &options.colormap,
+                options.remove_water_column,
+                &effective_alignments,
+                sidescan_pair,
+                discovery_ref,
+            ) {
                 Ok(has_overlay) => artifacts.push(OutputArtifact {
                     kind: "kmz".to_string(),
                     path: kmz.display().to_string(),
                     details: if has_overlay {
-                        "KMZ with stitched sidescan GroundOverlay georeferenced to sonar swath".to_string()
+                        "KMZ with stitched sidescan GroundOverlay georeferenced to sonar swath"
+                            .to_string()
                     } else {
                         "KMZ + trackline (no GPS bounding box — GroundOverlay skipped)".to_string()
                     },
@@ -378,14 +590,54 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
         }
     }
 
+    if options.video {
+        emit_progress(progress, "Rendering scrolling waterfall video...", 92);
+        let mut vid_opts = options.clone();
+        vid_opts.channel_alignments = effective_alignments.clone();
+        let video_result = crate::video::run_video_export_stitch(
+            parsed,
+            &output_dir,
+            &vid_opts,
+            sidescan_pair,
+            discovery_ref,
+        );
+        let details = if let Some(ref path) = video_result.output_path {
+            format!("{} · {}", video_result.status, path)
+        } else {
+            video_result.status.clone()
+        };
+        artifacts.push(OutputArtifact {
+            kind: if video_result.output_path.is_some() {
+                "video".to_string()
+            } else {
+                "video_error".to_string()
+            },
+            path: video_result
+                .output_path
+                .unwrap_or_else(|| output_dir.join("sonar_waterfall_enhanced.mp4").display().to_string()),
+            details,
+        });
+    }
+
     if options.web_viewer {
-        if let Some(a) = &app { let _ = a.emit("pipeline-progress", PipelineProgress { step: "Generating Web Viewer...".into(), pct: 95 }); }
+        emit_progress(progress, "Generating Web Viewer...", 95);
         let viewer_dir = output_dir.join("viewer");
-        match write_native_viewer(parsed, &viewer_dir, &options.colormap, options.remove_water_column, detections, &options.channel_alignments, options.noaa_enc, sidescan_pair, discovery_ref) {
+        match write_native_viewer(
+            parsed,
+            &viewer_dir,
+            &options.colormap,
+            options.remove_water_column,
+            detections,
+            &effective_alignments,
+            options.noaa_enc,
+            sidescan_pair,
+            discovery_ref,
+        ) {
             Ok(()) => artifacts.push(OutputArtifact {
                 kind: "viewer".to_string(),
                 path: viewer_dir.display().to_string(),
-                details: "MapLibre viewer · track + depth-coloured ping layer · click popup".to_string(),
+                details: "MapLibre viewer · track + depth-coloured ping layer · click popup"
+                    .to_string(),
             }),
             Err(e) => artifacts.push(OutputArtifact {
                 kind: "viewer".to_string(),
@@ -404,9 +656,14 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
                     Ok(()) => artifacts.push(OutputArtifact {
                         kind: "detections".to_string(),
                         path: det_json_path.display().to_string(),
-                        details: format!("{} targets ({} fish, {} structure, {} debris, {} wreck)",
-                            det.total_detections, det.fish_count, det.structure_count,
-                            det.debris_count, det.wreck_count),
+                        details: format!(
+                            "{} targets ({} fish, {} structure, {} debris, {} wreck)",
+                            det.total_detections,
+                            det.fish_count,
+                            det.structure_count,
+                            det.debris_count,
+                            det.wreck_count
+                        ),
                     }),
                     Err(e) => artifacts.push(OutputArtifact {
                         kind: "detections".to_string(),
@@ -425,7 +682,9 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
             let geojson = build_detections_geojson(det);
             let geojson_path = output_dir.join("detections.geojson");
             match serde_json::to_vec_pretty(&geojson) {
-                Ok(bytes) => { let _ = fs::write(&geojson_path, bytes); }
+                Ok(bytes) => {
+                    let _ = fs::write(&geojson_path, bytes);
+                }
                 Err(_) => {}
             }
         }
@@ -434,6 +693,10 @@ pub fn build_outputs(input_file: &Path, parsed: &ParseResult, options: &Pipeline
     Ok(OutputSummary {
         output_dir: output_dir.display().to_string(),
         artifacts,
+        stitch_layout,
+        layout_confirmation_required: false,
+        resolved_sidescan_pair: sidescan_pair,
+        resolved_alignments: effective_alignments,
     })
 }
 
@@ -476,63 +739,85 @@ fn lerp_colormap(n: f32, stops: &[(f32, [u8; 3])]) -> Rgb<u8> {
 pub fn apply_colormap(n: f32, name: &str) -> Rgb<u8> {
     let nm = if name.is_empty() { "amber" } else { name };
     match nm {
-        "amber" | "sonar" => lerp_colormap(n, &[
-            (0.00, [  0,   0,   0]),
-            (0.25, [ 60,  24,   0]),
-            (0.50, [140,  80,  10]),
-            (0.75, [220, 150,  30]),
-            (1.00, [255, 210,  90]),
-        ]),
+        "amber" | "sonar" => lerp_colormap(
+            n,
+            &[
+                (0.00, [0, 0, 0]),
+                (0.25, [60, 24, 0]),
+                (0.50, [140, 80, 10]),
+                (0.75, [220, 150, 30]),
+                (1.00, [255, 210, 90]),
+            ],
+        ),
         "grayscale" => {
             let v = (n.clamp(0.0, 1.0) * 255.0) as u8;
             Rgb([v, v, v])
         }
-        "ocean" => lerp_colormap(n, &[
-            (0.00, [  0,   0,  80]),
-            (0.30, [  0,  40, 120]),
-            (0.55, [  0, 100, 160]),
-            (0.75, [ 30, 180, 200]),
-            (0.90, [160, 230, 240]),
-            (1.00, [255, 255, 255]),
-        ]),
-        "inferno" => lerp_colormap(n, &[
-            (0.00, [  0,   0,   4]),
-            (0.20, [ 40,  11,  84]),
-            (0.40, [101,  21, 110]),
-            (0.60, [182,  55,  76]),
-            (0.80, [237, 121,  18]),
-            (1.00, [252, 255, 164]),
-        ]),
-        "iron" => lerp_colormap(n, &[
-            (0.00, [  0,   0,   0]),
-            (0.25, [  0,   0, 200]),
-            (0.50, [160,   0, 200]),
-            (0.75, [255, 160,   0]),
-            (1.00, [255, 255, 200]),
-        ]),
-        "rainbow" => lerp_colormap(n, &[
-            (0.00, [  0,   0, 255]),
-            (0.25, [  0, 255, 255]),
-            (0.50, [  0, 255,   0]),
-            (0.75, [255, 255,   0]),
-            (1.00, [255,   0,   0]),
-        ]),
-        "plasma" => lerp_colormap(n, &[
-            (0.00, [ 13,   8, 135]),
-            (0.25, [126,   3, 167]),
-            (0.50, [204,  71, 120]),
-            (0.75, [248, 149,  64]),
-            (1.00, [240, 249,  33]),
-        ]),
-        _ => lerp_colormap(n, &[   // "sonar" (default & fallback)
-            (0.00, [  0,   0,   0]),
-            (0.15, [  0,   0, 210]),
-            (0.35, [  0, 160, 255]),
-            (0.55, [  0, 220,  80]),
-            (0.70, [230, 200,   0]),
-            (0.85, [255,  55,   0]),
-            (1.00, [255, 255, 240]),
-        ]),
+        "ocean" => lerp_colormap(
+            n,
+            &[
+                (0.00, [0, 0, 80]),
+                (0.30, [0, 40, 120]),
+                (0.55, [0, 100, 160]),
+                (0.75, [30, 180, 200]),
+                (0.90, [160, 230, 240]),
+                (1.00, [255, 255, 255]),
+            ],
+        ),
+        "inferno" => lerp_colormap(
+            n,
+            &[
+                (0.00, [0, 0, 4]),
+                (0.20, [40, 11, 84]),
+                (0.40, [101, 21, 110]),
+                (0.60, [182, 55, 76]),
+                (0.80, [237, 121, 18]),
+                (1.00, [252, 255, 164]),
+            ],
+        ),
+        "iron" => lerp_colormap(
+            n,
+            &[
+                (0.00, [0, 0, 0]),
+                (0.25, [0, 0, 200]),
+                (0.50, [160, 0, 200]),
+                (0.75, [255, 160, 0]),
+                (1.00, [255, 255, 200]),
+            ],
+        ),
+        "rainbow" => lerp_colormap(
+            n,
+            &[
+                (0.00, [0, 0, 255]),
+                (0.25, [0, 255, 255]),
+                (0.50, [0, 255, 0]),
+                (0.75, [255, 255, 0]),
+                (1.00, [255, 0, 0]),
+            ],
+        ),
+        "plasma" => lerp_colormap(
+            n,
+            &[
+                (0.00, [13, 8, 135]),
+                (0.25, [126, 3, 167]),
+                (0.50, [204, 71, 120]),
+                (0.75, [248, 149, 64]),
+                (1.00, [240, 249, 33]),
+            ],
+        ),
+        _ => lerp_colormap(
+            n,
+            &[
+                // "sonar" (default & fallback)
+                (0.00, [0, 0, 0]),
+                (0.15, [0, 0, 210]),
+                (0.35, [0, 160, 255]),
+                (0.55, [0, 220, 80]),
+                (0.70, [230, 200, 0]),
+                (0.85, [255, 55, 0]),
+                (1.00, [255, 255, 240]),
+            ],
+        ),
     }
 }
 
@@ -566,7 +851,7 @@ fn ping_to_gray_row(ping: &Ping, dst_w: usize, gamma: f32) -> Vec<u8> {
     }
     nonzero.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
     let nz = nonzero.len();
-    let p2  = nonzero[(nz / 50).min(nz - 1)];
+    let p2 = nonzero[(nz / 50).min(nz - 1)];
     let p98 = nonzero[(nz * 49 / 50).min(nz - 1)];
     let span = (p98 - p2).max(1.0);
 
@@ -577,13 +862,13 @@ fn ping_to_gray_row(ping: &Ping, dst_w: usize, gamma: f32) -> Vec<u8> {
         (src_n - 1) as f32 / (dst_w - 1) as f32
     };
     for i in 0..dst_w {
-        let flt  = i as f32 * inv;
-        let lo   = flt as usize;
-        let hi   = (lo + 1).min(src_n - 1);
+        let flt = i as f32 * inv;
+        let lo = flt as usize;
+        let hi = (lo + 1).min(src_n - 1);
         let frac = flt - lo as f32;
-        let v    = corrected[lo] * (1.0 - frac) + corrected[hi] * frac;
+        let v = corrected[lo] * (1.0 - frac) + corrected[hi] * frac;
         let norm = ((v - p2) / span).clamp(0.0, 1.0).powf(gamma);
-        row[i]   = (norm * 255.0) as u8;
+        row[i] = (norm * 255.0) as u8;
     }
     row
 }
@@ -628,8 +913,9 @@ fn render_gray(pings: &[&Ping], max_w: u32, max_h: u32) -> GrayImage {
     let mut img: GrayImage = ImageBuffer::new(img_w, img_h);
     for dst_y in 0..img_h {
         let src_y = (dst_y as usize * src_h) / img_h as usize;
-        let ping  = &pings[src_y.min(src_h - 1)];
-        let row   = ping_to_gray_row_normed(ping, 0, img_w as usize, WATERFALL_GAMMA, p2, p98, &tvg_lut);
+        let ping = &pings[src_y.min(src_h - 1)];
+        let row =
+            ping_to_gray_row_normed(ping, 0, img_w as usize, WATERFALL_GAMMA, p2, p98, &tvg_lut);
         for (x, &v) in row.iter().enumerate() {
             img.put_pixel(x as u32, dst_y, image::Luma([v]));
         }
@@ -652,8 +938,9 @@ fn render_mosaic_rgb(pings: &[&Ping], max_w: u32, max_h: u32, colormap: &str) ->
     let mut img: RgbImage = ImageBuffer::new(img_w, img_h);
     for dst_y in 0..img_h {
         let src_y = (dst_y as usize * src_h) / img_h as usize;
-        let ping  = &pings[src_y.min(src_h - 1)];
-        let gray  = ping_to_gray_row_normed(ping, 0, img_w as usize, MOSAIC_GAMMA, p2, p98, &tvg_lut);
+        let ping = &pings[src_y.min(src_h - 1)];
+        let gray =
+            ping_to_gray_row_normed(ping, 0, img_w as usize, MOSAIC_GAMMA, p2, p98, &tvg_lut);
         for (x, &g) in gray.iter().enumerate() {
             img.put_pixel(x as u32, dst_y, apply_colormap(g as f32 / 255.0, colormap));
         }
@@ -712,48 +999,93 @@ fn overlay_extra_payload_magenta(gray: &GrayImage, pings: &[&Ping]) -> (RgbImage
 /// Returns a Vec of per-ping first-return sample indices.
 fn detect_per_ping_nadir(pings: &[&Ping]) -> Vec<usize> {
     const MIN_RUN: usize = 5; // require this many consecutive samples above threshold
-    pings.iter().map(|p| {
-        let n = p.samples.len();
-        if n < 32 { return 0; }
-
-        let mut sorted: Vec<u16> = p.samples.iter().copied().collect();
-        sorted.sort_unstable();
-
-        // Noise floor: 15th percentile of all samples
-        let p15_idx  = (n * 15 / 100).min(n - 1);
-        let p90_idx  = (n * 90 / 100).min(n - 1);
-        let p15  = sorted[p15_idx] as f32;
-        let p90  = sorted[p90_idx] as f32;
-        let span = (p90 - p15).max(1.0);
-
-        // Threshold: noise floor + 20% of dynamic range
-        let threshold = (p15 + span * 0.20) as u16;
-
-        // Find first sustained run of samples above threshold
-        let mut run = 0usize;
-        for i in 0..n {
-            if p.samples[i] > threshold {
-                run += 1;
-                if run >= MIN_RUN {
-                    return i + 1 - MIN_RUN;
-                }
-            } else {
-                run = 0;
+    pings
+        .iter()
+        .map(|p| {
+            let n = p.samples.len();
+            if n < 32 {
+                return 0;
             }
-        }
-        // No sustained run found → treats entire ping as "above noise" → nadir = 0
-        0
-    }).collect()
+
+            let mut sorted: Vec<u16> = p.samples.iter().copied().collect();
+            sorted.sort_unstable();
+
+            // Noise floor: 15th percentile of all samples
+            let p15_idx = (n * 15 / 100).min(n - 1);
+            let p90_idx = (n * 90 / 100).min(n - 1);
+            let p15 = sorted[p15_idx] as f32;
+            let p90 = sorted[p90_idx] as f32;
+            let span = (p90 - p15).max(1.0);
+
+            // Threshold: noise floor + 20% of dynamic range
+            let threshold = (p15 + span * 0.20) as u16;
+
+            // Find first sustained run of samples above threshold
+            let mut run = 0usize;
+            for i in 0..n {
+                if p.samples[i] > threshold {
+                    run += 1;
+                    if run >= MIN_RUN {
+                        return i + 1 - MIN_RUN;
+                    }
+                } else {
+                    run = 0;
+                }
+            }
+            // No sustained run found → treats entire ping as "above noise" → nadir = 0
+            0
+        })
+        .collect()
 }
 
 /// Compute the median nadir offset across all pings (used as a baseline).
 #[allow(dead_code)]
 fn detect_nadir_offset(pings: &[&Ping]) -> usize {
     let offsets = detect_per_ping_nadir(pings);
-    if offsets.is_empty() { return 0; }
+    if offsets.is_empty() {
+        return 0;
+    }
     let mut sorted = offsets;
     sorted.sort_unstable();
     sorted[sorted.len() / 2]
+}
+
+/// Per-ping skip before rendering a sidescan row.
+///
+/// `full_strip`: remove the full detected water column (butterfly stitch / KMZ).
+/// Otherwise only trim transducer ring-down (~30 samples max) for single-channel views.
+fn compute_nadir_skip_offsets(
+    pings: &[&Ping],
+    full_strip: bool,
+    profile: Option<&crate::channel_discovery::ChannelProfile>,
+) -> Vec<usize> {
+    if pings.is_empty() {
+        return vec![];
+    }
+    let raw = if full_strip {
+        crate::channel_discovery::per_ping_nadir_skip_with_profile(pings, profile)
+    } else {
+        detect_per_ping_nadir(pings)
+    };
+    if full_strip {
+        let mut smoothed = smooth_nadir_offsets(&raw);
+        if let Some(prof) = profile {
+            if prof.nadir_gap_width >= 10 {
+                let floor = prof.nadir_gap_width;
+                for s in &mut smoothed {
+                    if *s < floor {
+                        *s = floor;
+                    }
+                }
+            }
+        }
+        smoothed
+    } else {
+        let mut sorted = raw.clone();
+        sorted.sort_unstable();
+        let median = sorted[sorted.len() / 2];
+        vec![median.min(30); pings.len()]
+    }
 }
 
 /// Smooth per-ping nadir offsets using a moving-window median to reduce jitter.
@@ -761,7 +1093,9 @@ fn detect_nadir_offset(pings: &[&Ping]) -> usize {
 /// anomalies.  Window size is adaptive: 2% of total pings, clamped to [3, 31].
 fn smooth_nadir_offsets(raw_offsets: &[usize]) -> Vec<usize> {
     let n = raw_offsets.len();
-    if n == 0 { return vec![]; }
+    if n == 0 {
+        return vec![];
+    }
     let window = ((n / 50).max(3)).min(31) | 1; // force odd
     let half = window / 2;
     let mut smoothed = Vec::with_capacity(n);
@@ -783,7 +1117,11 @@ fn smooth_nadir_offsets(raw_offsets: &[usize]) -> Vec<usize> {
 /// for publication-quality mosaics.
 #[allow(dead_code)]
 fn ping_to_gray_row_from(ping: &Ping, start: usize, dst_w: usize, gamma: f32) -> Vec<u8> {
-    let src_raw = if start < ping.samples.len() { &ping.samples[start..] } else { &[] };
+    let src_raw = if start < ping.samples.len() {
+        &ping.samples[start..]
+    } else {
+        &[]
+    };
     let mut row = vec![0u8; dst_w];
     if src_raw.is_empty() || dst_w == 0 {
         return row;
@@ -791,9 +1129,11 @@ fn ping_to_gray_row_from(ping: &Ping, start: usize, dst_w: usize, gamma: f32) ->
 
     // Apply lightweight TVG correction (spreading-only, moderate gain)
     let tvg_lut = tvg::precompute_tvg_lut_simple(src_raw.len(), 15.0, 0.08);
-    let corrected: Vec<f32> = src_raw.iter().enumerate().map(|(i, &s)| {
-        s as f32 * tvg_lut.get(i).copied().unwrap_or(1.0)
-    }).collect();
+    let corrected: Vec<f32> = src_raw
+        .iter()
+        .enumerate()
+        .map(|(i, &s)| s as f32 * tvg_lut.get(i).copied().unwrap_or(1.0))
+        .collect();
     // No hard clip here — let percentile stretch handle the dynamic range
 
     // Robust percentile contrast stretch on corrected data
@@ -802,21 +1142,25 @@ fn ping_to_gray_row_from(ping: &Ping, start: usize, dst_w: usize, gamma: f32) ->
         return row;
     }
     nonzero.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let nz   = nonzero.len();
-    let p2   = nonzero[(nz / 50).min(nz - 1)];
-    let p98  = nonzero[(nz * 49 / 50).min(nz - 1)];
+    let nz = nonzero.len();
+    let p2 = nonzero[(nz / 50).min(nz - 1)];
+    let p98 = nonzero[(nz * 49 / 50).min(nz - 1)];
     let span = (p98 - p2).max(1.0);
 
     let src_n = corrected.len();
-    let inv   = if dst_w <= 1 || src_n <= 1 { 0.0_f32 } else { (src_n - 1) as f32 / (dst_w - 1) as f32 };
+    let inv = if dst_w <= 1 || src_n <= 1 {
+        0.0_f32
+    } else {
+        (src_n - 1) as f32 / (dst_w - 1) as f32
+    };
     for i in 0..dst_w {
-        let flt  = i as f32 * inv;
-        let lo   = flt as usize;
-        let hi   = (lo + 1).min(src_n - 1);
+        let flt = i as f32 * inv;
+        let lo = flt as usize;
+        let hi = (lo + 1).min(src_n - 1);
         let frac = flt - lo as f32;
-        let v    = corrected[lo] * (1.0 - frac) + corrected[hi] * frac;
+        let v = corrected[lo] * (1.0 - frac) + corrected[hi] * frac;
         let norm = ((v - p2) / span).clamp(0.0, 1.0).powf(gamma);
-        row[i]   = (norm * 255.0) as u8;
+        row[i] = (norm * 255.0) as u8;
     }
     row
 }
@@ -828,18 +1172,29 @@ fn ping_to_gray_row_from(ping: &Ping, start: usize, dst_w: usize, gamma: f32) ->
 /// and derives correction factors to flatten the range-dependent response.
 /// This naturally handles the dark nadir zone by boosting weak near-field samples.
 fn compute_empirical_tvg(pings: &[&Ping], offsets: &[usize]) -> Vec<f32> {
-    let max_len = pings.iter().enumerate().map(|(i, p)| {
-        let skip = offsets.get(i).copied().unwrap_or(0);
-        p.samples.len().saturating_sub(skip)
-    }).max().unwrap_or(0);
-    if max_len < 10 { return vec![1.0; max_len.max(1)]; }
+    let max_len = pings
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let skip = offsets.get(i).copied().unwrap_or(0);
+            p.samples.len().saturating_sub(skip)
+        })
+        .max()
+        .unwrap_or(0);
+    if max_len < 10 {
+        return vec![1.0; max_len.max(1)];
+    }
 
     // Accumulate signal per range bin
     let mut sums = vec![0.0f64; max_len];
     let mut counts = vec![0u32; max_len];
     for (idx, ping) in pings.iter().enumerate() {
         let skip = offsets.get(idx).copied().unwrap_or(0);
-        let src = if skip < ping.samples.len() { &ping.samples[skip..] } else { continue };
+        let src = if skip < ping.samples.len() {
+            &ping.samples[skip..]
+        } else {
+            continue;
+        };
         for (i, &s) in src.iter().enumerate() {
             if i < max_len && s > 0 {
                 sums[i] += s as f64;
@@ -849,27 +1204,42 @@ fn compute_empirical_tvg(pings: &[&Ping], offsets: &[usize]) -> Vec<f32> {
     }
 
     // Mean per range bin
-    let means: Vec<f32> = sums.iter().zip(counts.iter()).map(|(s, &c)| {
-        if c > 0 { (*s / c as f64) as f32 } else { 0.0 }
-    }).collect();
+    let means: Vec<f32> = sums
+        .iter()
+        .zip(counts.iter())
+        .map(|(s, &c)| if c > 0 { (*s / c as f64) as f32 } else { 0.0 })
+        .collect();
 
     // Target level: mean of mid-range bins (25th-75th percentile of range)
     // Avoids bias from near-nadir dead zone and far-range noise
     let q25 = max_len / 4;
     let q75 = (max_len * 3) / 4;
-    let mid_means: Vec<f32> = means[q25..q75].iter().filter(|&&m| m > 1.0).copied().collect();
+    let mid_means: Vec<f32> = means[q25..q75]
+        .iter()
+        .filter(|&&m| m > 1.0)
+        .copied()
+        .collect();
     let target = if !mid_means.is_empty() {
         mid_means.iter().sum::<f32>() / mid_means.len() as f32
     } else {
         let valid: Vec<f32> = means.iter().filter(|&&m| m > 1.0).copied().collect();
-        if valid.is_empty() { return vec![1.0; max_len]; }
+        if valid.is_empty() {
+            return vec![1.0; max_len];
+        }
         valid.iter().sum::<f32>() / valid.len() as f32
     };
 
     // Correction factor per bin: target / mean, clamped
-    let mut lut: Vec<f32> = means.iter().map(|&m| {
-        if m > 1.0 { (target / m).clamp(0.3, 15.0) } else { 1.0 }
-    }).collect();
+    let mut lut: Vec<f32> = means
+        .iter()
+        .map(|&m| {
+            if m > 1.0 {
+                (target / m).clamp(0.3, 15.0)
+            } else {
+                1.0
+            }
+        })
+        .collect();
 
     // Smooth with running average (window=21) to prevent noisy corrections
     let window = 21usize;
@@ -888,13 +1258,21 @@ fn compute_segment_norm(pings: &[&Ping], offsets: &[usize], tvg_lut: &[f32]) -> 
     let mut all_vals: Vec<f32> = Vec::new();
     for (idx, ping) in pings.iter().enumerate() {
         let skip = offsets.get(idx).copied().unwrap_or(0);
-        let src = if skip < ping.samples.len() { &ping.samples[skip..] } else { continue };
-        if src.is_empty() { continue; }
+        let src = if skip < ping.samples.len() {
+            &ping.samples[skip..]
+        } else {
+            continue;
+        };
+        if src.is_empty() {
+            continue;
+        }
         // Sample every 4th value to keep memory reasonable
         for (i, &s) in src.iter().enumerate().step_by(4) {
             let gain = tvg_lut.get(i).copied().unwrap_or(1.0);
             let v = s as f32 * gain;
-            if v > 0.0 { all_vals.push(v); }
+            if v > 0.0 {
+                all_vals.push(v);
+            }
         }
     }
     if all_vals.is_empty() {
@@ -910,15 +1288,29 @@ fn compute_segment_norm(pings: &[&Ping], offsets: &[usize], tvg_lut: &[f32]) -> 
 /// Like `ping_to_gray_row_from` but uses externally supplied normalization (p2/p98)
 /// and an empirical TVG LUT instead of the mathematical model.
 /// Eliminates row-to-row brightness banding and dark nadir zone.
-fn ping_to_gray_row_normed(ping: &Ping, start: usize, dst_w: usize, gamma: f32, p2: f32, p98: f32, tvg_lut: &[f32]) -> Vec<u8> {
-    let src_raw = if start < ping.samples.len() { &ping.samples[start..] } else { &[] };
+fn ping_to_gray_row_normed(
+    ping: &Ping,
+    start: usize,
+    dst_w: usize,
+    gamma: f32,
+    p2: f32,
+    p98: f32,
+    tvg_lut: &[f32],
+) -> Vec<u8> {
+    let src_raw = if start < ping.samples.len() {
+        &ping.samples[start..]
+    } else {
+        &[]
+    };
     let mut row = vec![0u8; dst_w];
     if src_raw.is_empty() || dst_w == 0 {
         return row;
     }
-    let corrected: Vec<f32> = src_raw.iter().enumerate().map(|(i, &s)| {
-        s as f32 * tvg_lut.get(i).copied().unwrap_or(1.0)
-    }).collect();
+    let corrected: Vec<f32> = src_raw
+        .iter()
+        .enumerate()
+        .map(|(i, &s)| s as f32 * tvg_lut.get(i).copied().unwrap_or(1.0))
+        .collect();
     let span = (p98 - p2).max(1.0);
     let src_n = corrected.len();
     if dst_w > 1 && src_n > 1 {
@@ -928,12 +1320,15 @@ fn ping_to_gray_row_normed(ping: &Ping, start: usize, dst_w: usize, gamma: f32, 
         let slant_min = altitude_m.max(0.0);
         let slant_max = slant_min + (src_n.saturating_sub(1) as f32) * SONAR_M_PER_SAMPLE_F32;
         if altitude_m > 0.01 && slant_max > slant_min + SONAR_M_PER_SAMPLE_F32 {
-            let ground_max = (slant_max * slant_max - altitude_m * altitude_m).max(0.0).sqrt();
+            let ground_max = (slant_max * slant_max - altitude_m * altitude_m)
+                .max(0.0)
+                .sqrt();
             for i in 0..dst_w {
                 let t = i as f32 / (dst_w - 1) as f32;
                 let ground = t * ground_max;
                 let slant = (ground * ground + altitude_m * altitude_m).sqrt();
-                let flt = ((slant - slant_min) / SONAR_M_PER_SAMPLE_F32).clamp(0.0, (src_n - 1) as f32);
+                let flt =
+                    ((slant - slant_min) / SONAR_M_PER_SAMPLE_F32).clamp(0.0, (src_n - 1) as f32);
                 let lo = flt as usize;
                 let hi = (lo + 1).min(src_n - 1);
                 let frac = flt - lo as f32;
@@ -1029,7 +1424,9 @@ fn ping_ground_half_m(ping: &Ping, nadir_offset: usize) -> f64 {
     }
     let altitude_m = fused_ping_altitude_m(ping, nadir_offset);
     let slant_max = altitude_m + (valid_samples.saturating_sub(1) as f64) * SONAR_M_PER_SAMPLE_F64;
-    let ground_half = (slant_max * slant_max - altitude_m * altitude_m).max(0.0).sqrt();
+    let ground_half = (slant_max * slant_max - altitude_m * altitude_m)
+        .max(0.0)
+        .sqrt();
     ground_half.clamp(10.0, 300.0)
 }
 
@@ -1051,8 +1448,14 @@ fn segment_swath_half_m(segment: &[&Ping], offsets: &[usize]) -> f64 {
 /// Uses Garmin's ~0.01 m per sample approximation (76.8 kHz, 1500 m/s).
 #[allow(dead_code)]
 fn estimate_swath_half_m(pings: &[&Ping]) -> f64 {
-    let mut counts: Vec<usize> = pings.iter().map(|p| p.samples.len()).filter(|&c| c > 10).collect();
-    if counts.is_empty() { return 30.0; }
+    let mut counts: Vec<usize> = pings
+        .iter()
+        .map(|p| p.samples.len())
+        .filter(|&c| c > 10)
+        .collect();
+    if counts.is_empty() {
+        return 30.0;
+    }
     counts.sort();
     let median_samples = counts[counts.len() / 2] as f64;
     (median_samples * SONAR_M_PER_SAMPLE_F64).clamp(10.0, 300.0)
@@ -1061,9 +1464,15 @@ fn estimate_swath_half_m(pings: &[&Ping]) -> f64 {
 /// Split pings into segments that break at heading changes for better turn following.
 /// Returns vector of (start, end) index pairs into the ping slice.
 /// Uses smaller base size (25) and tighter heading threshold (~15°) for cleaner corners.
-fn segment_by_heading(pings: &[&Ping], base_size: usize, max_heading_rad: f64) -> Vec<(usize, usize)> {
+fn segment_by_heading(
+    pings: &[&Ping],
+    base_size: usize,
+    max_heading_rad: f64,
+) -> Vec<(usize, usize)> {
     let n = pings.len();
-    if n < 3 { return vec![(0, n)]; }
+    if n < 3 {
+        return vec![(0, n)];
+    }
     let mut segments: Vec<(usize, usize)> = Vec::new();
     let mut seg_start = 0;
     while seg_start < n {
@@ -1080,10 +1489,14 @@ fn segment_by_heading(pings: &[&Ping], base_size: usize, max_heading_rad: f64) -
         let h0 = heading_between(pings[seg_start], pings[(seg_start + 2).min(n - 1)]);
         let mut split_at = seg_end_max;
         for j in (seg_start + 3)..seg_end_max {
-            if j >= n { break; }
+            if j >= n {
+                break;
+            }
             let h = heading_between(pings[j.saturating_sub(2)], pings[j]);
             let mut delta = (h - h0).abs();
-            if delta > std::f64::consts::PI { delta = 2.0 * std::f64::consts::PI - delta; }
+            if delta > std::f64::consts::PI {
+                delta = 2.0 * std::f64::consts::PI - delta;
+            }
             if delta > max_heading_rad {
                 split_at = j;
                 break;
@@ -1163,52 +1576,82 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
     let gps_counts: BTreeMap<u32, usize> = channels
         .iter()
         .map(|(&ch, v)| {
-            let n = v.iter().filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0)).count();
+            let n = v
+                .iter()
+                .filter(|p| {
+                    p.latitude.is_finite()
+                        && p.longitude.is_finite()
+                        && (p.latitude != 0.0 || p.longitude != 0.0)
+                })
+                .count();
             (ch, n)
         })
         .collect();
 
-    let total_counts: BTreeMap<u32, usize> = channels
-        .iter()
-        .map(|(&ch, v)| (ch, v.len()))
-        .collect();
+    let total_counts: BTreeMap<u32, usize> =
+        channels.iter().map(|(&ch, v)| (ch, v.len())).collect();
 
     let generation_of = |ch: u32| -> Option<String> {
-        parsed.channels.iter().find(|c| c.id == ch).and_then(|c| c.generation.clone())
+        parsed
+            .channels
+            .iter()
+            .find(|c| c.id == ch)
+            .and_then(|c| c.generation.clone())
     };
     let detected_gen = parsed.detected_generation.map(|g| g.to_string());
 
     // Classify channels by their sonar data characteristics
     let is_depth_temp = |ch: u32| -> bool {
         let lbl = channel_label(parsed, ch);
-        if lbl.contains("depth_temp") { return true; }
+        if lbl.contains("depth_temp") {
+            return true;
+        }
         // Depth/temp channels typically fire at ~2× the rate of sonar channels
         let pv = channels.get(&ch).cloned().unwrap_or_default();
-        if pv.is_empty() { return true; }
+        if pv.is_empty() {
+            return true;
+        }
         // Check: very few actual sonar samples (sample_count ≤ 1 or sonar_size ≤ 2)
-        let no_sonar = pv.iter().take(200).filter(|p| p.sample_count <= 1 || p.sonar_size <= 2).count();
+        let no_sonar = pv
+            .iter()
+            .take(200)
+            .filter(|p| p.sample_count <= 1 || p.sonar_size <= 2)
+            .count();
         no_sonar > pv.len().min(200) / 2
     };
 
     // Average sonar_size / sample_count ratio (indicates u8 vs i16 format)
     let avg_sample_ratio = |ch: u32| -> f64 {
         let pv = channels.get(&ch).cloned().unwrap_or_default();
-        if pv.is_empty() { return 0.0; }
-        let mut sum = 0.0; let mut n = 0usize;
+        if pv.is_empty() {
+            return 0.0;
+        }
+        let mut sum = 0.0;
+        let mut n = 0usize;
         for p in pv.iter().take(500) {
             if p.sample_count > 0 && p.sonar_size > 0 {
                 sum += p.sonar_size as f64 / p.sample_count as f64;
                 n += 1;
             }
         }
-        if n > 0 { sum / n as f64 } else { 0.0 }
+        if n > 0 {
+            sum / n as f64
+        } else {
+            0.0
+        }
     };
 
     // Median sample count (indicates resolution similarity)
     let median_sample_count = |ch: u32| -> usize {
         let pv = channels.get(&ch).cloned().unwrap_or_default();
-        if pv.is_empty() { return 0; }
-        let mut counts: Vec<usize> = pv.iter().take(500).map(|p| p.sample_count as usize).collect();
+        if pv.is_empty() {
+            return 0;
+        }
+        let mut counts: Vec<usize> = pv
+            .iter()
+            .take(500)
+            .map(|p| p.sample_count as usize)
+            .collect();
         counts.sort_unstable();
         counts[counts.len() / 2]
     };
@@ -1226,15 +1669,22 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
     // Accept channels with ≥ 5% of the largest channel's count, minimum 50 pings
     let min_pings = (max_total / 20).max(50);
 
-    let candidates: Vec<u32> = channels.keys().copied()
+    let candidates: Vec<u32> = channels
+        .keys()
+        .copied()
         .filter(|&ch| {
             !is_depth_temp(ch)
+                && !crate::channel_discovery::is_known_downscan_channel_id(ch)
                 && total_counts.get(&ch).copied().unwrap_or(0) >= min_pings
         })
         .collect();
 
-    eprintln!("[channel-probe] {} candidates from {} channels (min_pings={})",
-        candidates.len(), channels.len(), min_pings);
+    eprintln!(
+        "[channel-probe] {} candidates from {} channels (min_pings={})",
+        candidates.len(),
+        channels.len(),
+        min_pings
+    );
     for &ch in &candidates {
         let lbl = channel_label(parsed, ch);
         let gen = generation_of(ch).unwrap_or_else(|| "?".into());
@@ -1242,7 +1692,9 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
         let tc = total_counts.get(&ch).copied().unwrap_or(0);
         let ratio = avg_sample_ratio(ch);
         let med_sc = median_sample_count(ch);
-        eprintln!("  ch{ch}: {lbl}({gen}) total={tc} gps={gc} ratio={ratio:.2} med_samples={med_sc}");
+        eprintln!(
+            "  ch{ch}: {lbl}({gen}) total={tc} gps={gc} ratio={ratio:.2} med_samples={med_sc}"
+        );
     }
 
     if candidates.is_empty() {
@@ -1260,7 +1712,7 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
     let mut best: Option<(u32, u32, f64)> = None;
 
     for i in 0..candidates.len() {
-        for j in (i+1)..candidates.len() {
+        for j in (i + 1)..candidates.len() {
             let (a, b) = (candidates[i], candidates[j]);
             let ac = total_counts.get(&a).copied().unwrap_or(0);
             let bc = total_counts.get(&b).copied().unwrap_or(0);
@@ -1285,14 +1737,20 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
             let b_med = median_sample_count(b) as f64;
             let count_sim = if a_med > 0.0 && b_med > 0.0 {
                 (a_med.min(b_med)) / a_med.max(b_med)
-            } else { 0.0 };
+            } else {
+                0.0
+            };
 
             // 4. GPS coverage bonus (both have GPS = much more useful)
             let a_gps = gps_counts.get(&a).copied().unwrap_or(0);
             let b_gps = gps_counts.get(&b).copied().unwrap_or(0);
-            let gps_bonus = if a_gps > 50 && b_gps > 50 { 2.0 }
-                else if a_gps > 0 || b_gps > 0 { 0.5 }
-                else { 0.0 };
+            let gps_bonus = if a_gps > 50 && b_gps > 50 {
+                2.0
+            } else if a_gps > 0 || b_gps > 0 {
+                0.5
+            } else {
+                0.0
+            };
 
             // 5. Cross-generation bonus (different hw gen = likely different arms)
             let a_gen = generation_of(a);
@@ -1304,10 +1762,19 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
             let a_lbl = channel_label(parsed, a);
             let b_lbl = channel_label(parsed, b);
             let has_port = a_lbl.contains("port_sidescan") || b_lbl.contains("port_sidescan");
-            let has_star = a_lbl.contains("starboard_sidescan") || b_lbl.contains("starboard_sidescan");
-            let label_bonus = if has_port && has_star { 4.0 }    // proper port+star
-                else if has_port || has_star { 1.5 }              // at least one sidescan label
-                else { 0.0 };
+            let has_star =
+                a_lbl.contains("starboard_sidescan") || b_lbl.contains("starboard_sidescan");
+            let label_bonus = if has_port && has_star {
+                4.0
+            }
+            // proper port+star
+            else if has_port || has_star {
+                1.5
+            }
+            // at least one sidescan label
+            else {
+                0.0
+            };
 
             // 7. Generation match with detected_gen (prefer native gen)
             let det_bonus = match detected_gen.as_deref() {
@@ -1324,9 +1791,19 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
             };
 
             // 8. Penalty for downscan-only labels (both labeled downscan = risky)
-            let both_downscan = a_lbl.contains("downscan") && b_lbl.contains("downscan")
-                && !a_lbl.contains("sidescan") && !b_lbl.contains("sidescan");
+            let both_downscan = a_lbl.contains("downscan")
+                && b_lbl.contains("downscan")
+                && !a_lbl.contains("sidescan")
+                && !b_lbl.contains("sidescan");
             let downscan_penalty = if both_downscan { -2.0 } else { 0.0 };
+
+            // 8b. Never butterfly-stitch sidescan with a DownVu/CHIRP channel (e.g. ch6).
+            if crate::channel_discovery::is_known_downscan_channel_id(a)
+                || crate::channel_discovery::is_known_downscan_channel_id(b)
+            {
+                continue;
+            }
+            let cross_downscan_penalty = 0.0;
 
             // 9. Penalty for same-gen same-side (likely ClearVü duplicate, not two arms)
             let same_gen_same_side = !cross_gen
@@ -1343,6 +1820,7 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
                 + label_bonus
                 + det_bonus
                 + downscan_penalty
+                + cross_downscan_penalty
                 + dup_penalty;
 
             eprintln!("  pair ch{}+ch{}: score={:.2} (bal={:.2} ovlp={:.2} struct={:.2}+{:.2} gps={:.1} xgen={:.1} lbl={:.1} det={:.1} ds={:.1} dup={:.1})",
@@ -1368,15 +1846,23 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
                 (b, a)
             } else {
                 // No clear port/star labels — lower ID = port
-                if a < b { (a, b) } else { (b, a) }
+                if a < b {
+                    (a, b)
+                } else {
+                    (b, a)
+                }
             };
-            eprintln!("[channel-probe] SELECTED ch{}=port ch{}=star (score={:.2})", port, star, score);
+            eprintln!(
+                "[channel-probe] SELECTED ch{}=port ch{}=star (score={:.2})",
+                port, star, score
+            );
             (Some(port), Some(star))
         }
         None => {
             eprintln!("[channel-probe] no viable pair found");
             // Try single best channel as a fallback
-            let best_single = candidates.iter()
+            let best_single = candidates
+                .iter()
                 .max_by_key(|&&ch| total_counts.get(&ch).copied().unwrap_or(0))
                 .copied();
             if let Some(ch) = best_single {
@@ -1395,6 +1881,7 @@ fn should_flip(
     alignments: &[crate::channel_alignment::ChannelAlignment],
     assigned_as_port: bool,
     discovery: Option<&crate::channel_discovery::DiscoveryResult>,
+    nadir_skip: usize,
 ) -> bool {
     crate::channel_discovery::resolve_stitch_flip(
         parsed,
@@ -1402,12 +1889,26 @@ fn should_flip(
         assigned_as_port,
         discovery,
         alignments,
+        nadir_skip,
     )
+}
+
+/// Median per-ping nadir skip used for stitch-orientation (alignment before strip).
+fn median_nadir_skip(offsets: &[usize]) -> usize {
+    if offsets.is_empty() {
+        return 0;
+    }
+    let mut sorted = offsets.to_vec();
+    sorted.sort_unstable();
+    sorted[sorted.len() / 2]
 }
 
 /// Should a channel's samples be inverted (negate brightness)?
 fn should_invert(ch_id: u32, alignments: &[crate::channel_alignment::ChannelAlignment]) -> bool {
-    alignments.iter().find(|a| a.channel_id == ch_id).map_or(false, |a| a.invert)
+    alignments
+        .iter()
+        .find(|a| a.channel_id == ch_id)
+        .map_or(false, |a| a.invert)
 }
 
 /// Render a stitched overlay strip from port + starboard pings for a segment.
@@ -1437,34 +1938,15 @@ fn render_stitched_overlay_strip(
     let half_w = if has_both { seg_w / 2 } else { seg_w };
     let mut strip: RgbImage = ImageBuffer::from_pixel(seg_w, seg_h, Rgb([5u8, 10, 20]));
 
-    // Always detect minimum nadir skip (dead near-field zone) even when
-    // remove_water_column is off.  When enabled, use the full adaptive detection.
+    let port_prof = port_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let star_prof = star_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
     let port_offsets = if !port_pings.is_empty() {
-        let raw = detect_per_ping_nadir(port_pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            // Minimum skip: use median of detected nadirs, clamped to modest value
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            let min_skip = median.min(30); // Don't skip more than 30 samples when WC is off
-            vec![min_skip; port_pings.len()]
-        }
+        compute_nadir_skip_offsets(port_pings, true, port_prof)
     } else {
         vec![]
     };
     let star_offsets = if !star_pings.is_empty() {
-        let raw = detect_per_ping_nadir(star_pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            let min_skip = median.min(30);
-            vec![min_skip; star_pings.len()]
-        }
+        compute_nadir_skip_offsets(star_pings, true, star_prof)
     } else {
         vec![]
     };
@@ -1502,8 +1984,28 @@ fn render_stitched_overlay_strip(
         (0.0, 1.0)
     };
 
-    let port_flip = port_ch.map_or(true, |ch| should_flip(parsed, ch, alignments, true, discovery));
-    let star_flip = star_ch.map_or(false, |ch| should_flip(parsed, ch, alignments, false, discovery));
+    // Alignment/orientation after nadir offsets: strip is applied at render time,
+    // so pass median skip so starboard mirrors when the water column is removed.
+    let port_flip = port_ch.map_or(true, |ch| {
+        should_flip(
+            parsed,
+            ch,
+            alignments,
+            true,
+            discovery,
+            median_nadir_skip(&port_offsets),
+        )
+    });
+    let star_flip = star_ch.map_or(false, |ch| {
+        should_flip(
+            parsed,
+            ch,
+            alignments,
+            false,
+            discovery,
+            median_nadir_skip(&star_offsets),
+        )
+    });
     let port_invert = port_ch.map_or(false, |ch| should_invert(ch, alignments));
     let star_invert = star_ch.map_or(false, |ch| should_invert(ch, alignments));
 
@@ -1515,9 +2017,19 @@ fn render_stitched_overlay_strip(
             let idx = src_y.min(n - 1);
             let skip = star_offsets.get(idx).copied().unwrap_or(0);
             let render_w = if has_both { half_w } else { seg_w };
-            let mut gray = ping_to_gray_row_normed(star_pings[idx], skip, render_w as usize, MOSAIC_GAMMA, star_p2, star_p98, &star_tvg);
+            let mut gray = ping_to_gray_row_normed(
+                star_pings[idx],
+                skip,
+                render_w as usize,
+                MOSAIC_GAMMA,
+                star_p2,
+                star_p98,
+                &star_tvg,
+            );
             if star_invert {
-                for g in gray.iter_mut() { *g = 255 - *g; }
+                for g in gray.iter_mut() {
+                    *g = 255 - *g;
+                }
             }
             let x_offset = if has_both { half_w } else { 0 };
             if star_flip {
@@ -1527,7 +2039,11 @@ fn render_stitched_overlay_strip(
                 }
             } else {
                 for (xi, &g) in gray.iter().enumerate() {
-                    strip.put_pixel(x_offset + xi as u32, dst_y, apply_colormap(g as f32 / 255.0, colormap));
+                    strip.put_pixel(
+                        x_offset + xi as u32,
+                        dst_y,
+                        apply_colormap(g as f32 / 255.0, colormap),
+                    );
                 }
             }
         }
@@ -1538,9 +2054,19 @@ fn render_stitched_overlay_strip(
             let idx = src_y.min(n - 1);
             let skip = port_offsets.get(idx).copied().unwrap_or(0);
             let render_w = if has_both { half_w } else { seg_w };
-            let mut gray = ping_to_gray_row_normed(port_pings[idx], skip, render_w as usize, MOSAIC_GAMMA, port_p2, port_p98, &port_tvg);
+            let mut gray = ping_to_gray_row_normed(
+                port_pings[idx],
+                skip,
+                render_w as usize,
+                MOSAIC_GAMMA,
+                port_p2,
+                port_p98,
+                &port_tvg,
+            );
             if port_invert {
-                for g in gray.iter_mut() { *g = 255 - *g; }
+                for g in gray.iter_mut() {
+                    *g = 255 - *g;
+                }
             }
             if port_flip {
                 for (xi, &g) in gray.iter().enumerate() {
@@ -1561,8 +2087,9 @@ fn render_stitched_overlay_strip(
     }
     // Blend the nadir seam: remove the hard port/star edge, correct level mismatch.
     if has_both {
-        // ~14px per side; small since strips are only 256px wide.
-        blend_nadir_seam(&mut strip, half_w, 14);
+        // Nadir blend scales with strip width (wider KMZ strips need a wider seam zone).
+        let seam_half = (half_w / 18).clamp(8, 32);
+        blend_nadir_seam(&mut strip, half_w, seam_half);
     }
     strip
 }
@@ -1603,12 +2130,24 @@ fn row_gradient_rms(img: &RgbImage, y: u32, x_lo: u32, x_hi: u32) -> f32 {
     let mut sum_sq = 0.0f32;
     let mut n = 0u32;
     for x in x_lo..x_hi {
-        let dx = if x + 1 < w    { lum(x + 1, y) - lum(x, y) } else { 0.0 };
-        let dy = if y + 1 < h    { lum(x, y + 1) - lum(x, y) } else { 0.0 };
+        let dx = if x + 1 < w {
+            lum(x + 1, y) - lum(x, y)
+        } else {
+            0.0
+        };
+        let dy = if y + 1 < h {
+            lum(x, y + 1) - lum(x, y)
+        } else {
+            0.0
+        };
         sum_sq += dx * dx + 0.25 * dy * dy;
         n += 1;
     }
-    if n == 0 { 0.0 } else { (sum_sq / n as f32).sqrt() }
+    if n == 0 {
+        0.0
+    } else {
+        (sum_sq / n as f32).sqrt()
+    }
 }
 
 /// Blend the nadir seam of a butterfly mosaic using level normalization and
@@ -1618,7 +2157,9 @@ fn row_gradient_rms(img: &RgbImage, y: u32, x_lo: u32, x_hi: u32) -> f32 {
 /// * `blend_half_w`  — half-width in pixels of the soft blend zone on each side
 fn blend_nadir_seam(img: &mut RgbImage, seam_x: u32, blend_half_w: u32) {
     let (w, h) = img.dimensions();
-    if seam_x == 0 || seam_x >= w || blend_half_w == 0 { return; }
+    if seam_x == 0 || seam_x >= w || blend_half_w == 0 {
+        return;
+    }
 
     let x_lo = seam_x.saturating_sub(blend_half_w);
     let x_hi = (seam_x + blend_half_w).min(w);
@@ -1628,7 +2169,7 @@ fn blend_nadir_seam(img: &mut RgbImage, seam_x: u32, blend_half_w: u32) {
     // ── Stage 1: level normalization ─────────────────────────────────────────
     let mut port_sum = 0.0f32;
     let mut star_sum = 0.0f32;
-    let mut level_n  = 0u32;
+    let mut level_n = 0u32;
     for y in 0..h {
         for d in 0..level_band {
             if seam_x > d {
@@ -1649,8 +2190,8 @@ fn blend_nadir_seam(img: &mut RgbImage, seam_x: u32, blend_half_w: u32) {
         (1.0f32, 1.0f32)
     } else {
         let geo = (port_mean * star_mean).sqrt();
-        let ps  = (geo / port_mean).clamp(0.70, 1.50);
-        let ss  = (geo / star_mean).clamp(0.70, 1.50);
+        let ps = (geo / port_mean).clamp(0.70, 1.50);
+        let ss = (geo / star_mean).clamp(0.70, 1.50);
         (ps, ss)
     };
 
@@ -1666,11 +2207,15 @@ fn blend_nadir_seam(img: &mut RgbImage, seam_x: u32, blend_half_w: u32) {
             for x in x_lo..seam_x {
                 let t = (seam_x - x) as f32 / blend_half_w.max(1) as f32;
                 let p = *img.get_pixel(x, y);
-                img.put_pixel(x, y, Rgb([
-                    scale_pixel(p[0], port_scale, t),
-                    scale_pixel(p[1], port_scale, t),
-                    scale_pixel(p[2], port_scale, t),
-                ]));
+                img.put_pixel(
+                    x,
+                    y,
+                    Rgb([
+                        scale_pixel(p[0], port_scale, t),
+                        scale_pixel(p[1], port_scale, t),
+                        scale_pixel(p[2], port_scale, t),
+                    ]),
+                );
             }
         }
     }
@@ -1679,11 +2224,15 @@ fn blend_nadir_seam(img: &mut RgbImage, seam_x: u32, blend_half_w: u32) {
             for x in seam_x..x_hi {
                 let t = (x - seam_x) as f32 / blend_half_w.max(1) as f32;
                 let p = *img.get_pixel(x, y);
-                img.put_pixel(x, y, Rgb([
-                    scale_pixel(p[0], star_scale, t),
-                    scale_pixel(p[1], star_scale, t),
-                    scale_pixel(p[2], star_scale, t),
-                ]));
+                img.put_pixel(
+                    x,
+                    y,
+                    Rgb([
+                        scale_pixel(p[0], star_scale, t),
+                        scale_pixel(p[1], star_scale, t),
+                        scale_pixel(p[2], star_scale, t),
+                    ]),
+                );
             }
         }
     }
@@ -1707,17 +2256,26 @@ fn blend_nadir_seam(img: &mut RgbImage, seam_x: u32, blend_half_w: u32) {
         // so we don't read-after-write from Stage 1 writes above.
         for x in x_lo..x_hi {
             let dist = (x as i32 - seam_x as i32).unsigned_abs();
-            if dist >= blend_half_w { continue; }
-            let t  = dist as f32 / blend_half_w as f32; // 0 at seam → 1 at edge
-            // Smoothstep envelope: 1.0 at seam, 0.0 at boundary
-            let env = { let t2 = t * t; 1.0 - t2 * (3.0 - 2.0 * t) };
-            if env < 0.005 { continue; }
+            if dist >= blend_half_w {
+                continue;
+            }
+            let t = dist as f32 / blend_half_w as f32; // 0 at seam → 1 at edge
+                                                       // Smoothstep envelope: 1.0 at seam, 0.0 at boundary
+            let env = {
+                let t2 = t * t;
+                1.0 - t2 * (3.0 - 2.0 * t)
+            };
+            if env < 0.005 {
+                continue;
+            }
 
             // Mirror coordinate on the other side of the seam
             let mirror = (2i32 * seam_x as i32 - x as i32) as u32;
-            if mirror >= w { continue; }
+            if mirror >= w {
+                continue;
+            }
 
-            let this_px  = *img.get_pixel(x, y);
+            let this_px = *img.get_pixel(x, y);
             let other_px = *img.get_pixel(mirror, y);
 
             // On port side (x < seam_x): blend in some starboard
@@ -1732,11 +2290,15 @@ fn blend_nadir_seam(img: &mut RgbImage, seam_x: u32, blend_half_w: u32) {
             let blend = |a: u8, b: u8| -> u8 {
                 (a as f32 * (1.0 - other_w) + b as f32 * other_w).clamp(0.0, 255.0) as u8
             };
-            img.put_pixel(x, y, Rgb([
-                blend(this_px[0], other_px[0]),
-                blend(this_px[1], other_px[1]),
-                blend(this_px[2], other_px[2]),
-            ]));
+            img.put_pixel(
+                x,
+                y,
+                Rgb([
+                    blend(this_px[0], other_px[0]),
+                    blend(this_px[1], other_px[1]),
+                    blend(this_px[2], other_px[2]),
+                ]),
+            );
         }
     }
 }
@@ -1757,9 +2319,9 @@ fn render_sidescan_stitched(
     port_pings: &[&Ping],
     star_pings: &[&Ping],
     down_pings: &[&Ping],
-    single_w:   u32,
-    max_h:      u32,
-    colormap:   &str,
+    single_w: u32,
+    max_h: u32,
+    colormap: &str,
     remove_water_column: bool,
     stitch_nadir: bool,
     alignments: &[crate::channel_alignment::ChannelAlignment],
@@ -1772,37 +2334,22 @@ fn render_sidescan_stitched(
         return None;
     }
     let n_pings = port_pings.len().max(star_pings.len());
-    let img_h   = (n_pings as u32).min(max_h).max(1);
+    let img_h = (n_pings as u32).min(max_h).max(1);
     let total_w = single_w * 2;
     let mut img: RgbImage = ImageBuffer::from_pixel(total_w, img_h, Rgb([5u8, 10, 20]));
 
-    // Per-ping adaptive nadir with smoothed offsets for alignment
-    // Always detect minimum nadir skip even when remove_water_column is off
+    // Butterfly mosaic: strip full water column so xi=0 is first seabed return at the
+    // centre seam, not a 30-sample ring-down trim that leaves nadir on the outer edge.
+    let full_nadir_strip = remove_water_column || stitch_nadir;
+    let port_prof = port_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let star_prof = star_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
     let port_offsets = if !port_pings.is_empty() {
-        let raw = detect_per_ping_nadir(port_pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            let min_skip = median.min(30);
-            vec![min_skip; port_pings.len()]
-        }
+        compute_nadir_skip_offsets(port_pings, full_nadir_strip, port_prof)
     } else {
         vec![0; n_pings]
     };
     let star_offsets = if !star_pings.is_empty() {
-        let raw = detect_per_ping_nadir(star_pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            let min_skip = median.min(30);
-            vec![min_skip; star_pings.len()]
-        }
+        compute_nadir_skip_offsets(star_pings, full_nadir_strip, star_prof)
     } else {
         vec![0; n_pings]
     };
@@ -1858,21 +2405,47 @@ fn render_sidescan_stitched(
     };
     let blend_px = (strip_half_w / 3).max(2);
 
-    let port_flip = port_ch.map_or(true, |ch| should_flip(parsed, ch, alignments, true, discovery));
-    let star_flip = star_ch.map_or(false, |ch| should_flip(parsed, ch, alignments, false, discovery));
+    let port_flip = port_ch.map_or(true, |ch| {
+        should_flip(
+            parsed,
+            ch,
+            alignments,
+            true,
+            discovery,
+            median_nadir_skip(&port_offsets),
+        )
+    });
+    let star_flip = star_ch.map_or(false, |ch| {
+        should_flip(
+            parsed,
+            ch,
+            alignments,
+            false,
+            discovery,
+            median_nadir_skip(&star_offsets),
+        )
+    });
 
     for dst_y in 0..img_h {
         // Per-channel y-mapping: each channel scales independently to the output
         // height so the shorter channel stretches to fill rather than repeating
         // its last ping (which caused the vertical smear artifact).
 
-        // Starboard → right half (nadir at left edge of this half)
+        // Starboard → right half; xi=0 (post-nadir) lands on centre seam at x=single_w
         if !star_pings.is_empty() {
             let n = star_pings.len();
             let src_y = (dst_y as usize * n) / img_h as usize;
             let idx = src_y.min(n - 1);
             let skip = star_offsets.get(idx).copied().unwrap_or(0);
-            let gray = ping_to_gray_row_normed(star_pings[idx], skip, single_w as usize, MOSAIC_GAMMA, star_p2, star_p98, &star_tvg);
+            let gray = ping_to_gray_row_normed(
+                star_pings[idx],
+                skip,
+                single_w as usize,
+                MOSAIC_GAMMA,
+                star_p2,
+                star_p98,
+                &star_tvg,
+            );
             for (xi, &g) in gray.iter().enumerate() {
                 let dst_x = if star_flip {
                     single_w + (single_w - 1 - xi as u32)
@@ -1882,13 +2455,21 @@ fn render_sidescan_stitched(
                 img.put_pixel(dst_x, dst_y, apply_colormap(g as f32 / 255.0, colormap));
             }
         }
-        // Port → left half, reversed so the outer edge is at x = 0
+        // Port → left half; mirror so xi=0 (post-nadir) lands on centre seam at x=single_w-1
         if !port_pings.is_empty() {
             let n = port_pings.len();
             let src_y = (dst_y as usize * n) / img_h as usize;
             let idx = src_y.min(n - 1);
             let skip = port_offsets.get(idx).copied().unwrap_or(0);
-            let gray = ping_to_gray_row_normed(port_pings[idx], skip, single_w as usize, MOSAIC_GAMMA, port_p2, port_p98, &port_tvg);
+            let gray = ping_to_gray_row_normed(
+                port_pings[idx],
+                skip,
+                single_w as usize,
+                MOSAIC_GAMMA,
+                port_p2,
+                port_p98,
+                &port_tvg,
+            );
             for (xi, &g) in gray.iter().enumerate() {
                 let dst_x = if port_flip {
                     single_w - 1 - xi as u32
@@ -1917,7 +2498,9 @@ fn render_sidescan_stitched(
             );
             for (xi, &g) in gray.iter().enumerate() {
                 let dst_x = single_w - strip_half_w + xi as u32;
-                if dst_x >= total_w { break; }
+                if dst_x >= total_w {
+                    break;
+                }
                 let fg = apply_colormap(g as f32 / 255.0, colormap);
 
                 let dist_from_edge = (xi as u32).min(strip_w as u32 - 1 - xi as u32);
@@ -1957,7 +2540,12 @@ fn encode_png_rgb(img: &RgbImage) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     let encoder = PngEncoder::new(&mut buf);
     encoder
-        .write_image(img.as_raw(), img.width(), img.height(), ColorType::Rgb8.into())
+        .write_image(
+            img.as_raw(),
+            img.width(),
+            img.height(),
+            ColorType::Rgb8.into(),
+        )
         .context("In-memory PNG encode failed")?;
     Ok(buf)
 }
@@ -1967,7 +2555,12 @@ fn encode_png_rgba(img: &image::RgbaImage) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     let encoder = PngEncoder::new(&mut buf);
     encoder
-        .write_image(img.as_raw(), img.width(), img.height(), ColorType::Rgba8.into())
+        .write_image(
+            img.as_raw(),
+            img.width(),
+            img.height(),
+            ColorType::Rgba8.into(),
+        )
         .context("In-memory RGBA PNG encode failed")?;
     Ok(buf)
 }
@@ -2002,15 +2595,27 @@ struct PrecomputedNorm {
 ///
 /// `feather_frac_x` — fraction of width to feather on left/right edges (e.g. 0.12)
 /// `feather_frac_y` — fraction of height to feather on top/bottom edges (e.g. 0.06)
-fn apply_alpha_feathering(rgb: &RgbImage, feather_frac_x: f32, feather_frac_y: f32) -> image::RgbaImage {
+fn apply_alpha_feathering(
+    rgb: &RgbImage,
+    feather_frac_x: f32,
+    feather_frac_y: f32,
+) -> image::RgbaImage {
     let (w, h) = rgb.dimensions();
     let mut out: image::RgbaImage = ImageBuffer::new(w, h);
 
     // When fractions are zero, skip geometric feathering entirely —
     // only apply the near-black transparency pass.
     let do_geom = feather_frac_x > 0.0 || feather_frac_y > 0.0;
-    let edge_x = if do_geom { (w as f32 * feather_frac_x).max(2.0) as u32 } else { 0 };
-    let edge_y = if do_geom { (h as f32 * feather_frac_y).max(1.0) as u32 } else { 0 };
+    let edge_x = if do_geom {
+        (w as f32 * feather_frac_x).max(2.0) as u32
+    } else {
+        0
+    };
+    let edge_y = if do_geom {
+        (h as f32 * feather_frac_y).max(1.0) as u32
+    } else {
+        0
+    };
 
     for y in 0..h {
         for x in 0..w {
@@ -2043,7 +2648,11 @@ fn apply_alpha_feathering(rgb: &RgbImage, feather_frac_x: f32, feather_frac_y: f
 
             // Make near-black pixels transparent (removes dark background fill)
             let lum = px[0] as f32 * 0.299 + px[1] as f32 * 0.587 + px[2] as f32 * 0.114;
-            let data_alpha = if lum < 6.0 { (lum / 6.0).clamp(0.0, 1.0) } else { 1.0 };
+            let data_alpha = if lum < 6.0 {
+                (lum / 6.0).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
 
             let final_alpha = (geom_alpha * data_alpha * 255.0).clamp(0.0, 255.0) as u8;
             out.put_pixel(x, y, Rgba([px[0], px[1], px[2], final_alpha]));
@@ -2080,13 +2689,21 @@ fn to_base64(data: &[u8]) -> String {
 
 /// Compute perpendicular left/right corners at a position given heading.
 /// Returns ((left_lon, left_lat), (right_lon, right_lat)).
-fn perp_corners(lat: f64, lon: f64, heading_rad: f64, swath_half_m: f64) -> ((f64, f64), (f64, f64)) {
+fn perp_corners(
+    lat: f64,
+    lon: f64,
+    heading_rad: f64,
+    swath_half_m: f64,
+) -> ((f64, f64), (f64, f64)) {
     let perp_rad = heading_rad + std::f64::consts::FRAC_PI_2;
     let m_per_deg_lat = 111_320.0;
     let m_per_deg_lon = 111_320.0 * lat.to_radians().cos();
     let half_lat = swath_half_m * perp_rad.cos() / m_per_deg_lat;
     let half_lon = swath_half_m * perp_rad.sin() / m_per_deg_lon.max(1.0);
-    ((lon - half_lon, lat - half_lat), (lon + half_lon, lat + half_lat))
+    (
+        (lon - half_lon, lat - half_lat),
+        (lon + half_lon, lat + half_lat),
+    )
 }
 
 /// Average two headings (radians) handling wrap-around correctly.
@@ -2100,12 +2717,12 @@ fn avg_heading(h1: f64, h2: f64) -> f64 {
 /// Corrects for longitude convergence at latitude so heading is consistent
 /// with the perp_corners() metre-space projection.
 fn heading_between(a: &Ping, b: &Ping) -> f64 {
-      if let (Some(ha), Some(hb)) = (a.heading_deg, b.heading_deg) {
-          // Both have sensor heading. Convert to geographic radians.
-          return avg_heading(ha.to_radians() as f64, hb.to_radians() as f64);
-      }
-      let delta_lat = b.latitude - a.latitude;
-      let delta_lon = (b.longitude - a.longitude) * a.latitude.to_radians().cos();
+    if let (Some(ha), Some(hb)) = (a.heading_deg, b.heading_deg) {
+        // Both have sensor heading. Convert to geographic radians.
+        return avg_heading(ha.to_radians() as f64, hb.to_radians() as f64);
+    }
+    let delta_lat = b.latitude - a.latitude;
+    let delta_lon = (b.longitude - a.longitude) * a.latitude.to_radians().cos();
     delta_lon.atan2(delta_lat)
 }
 
@@ -2129,7 +2746,9 @@ fn compute_shared_boundaries(
     // Helper: compute heading at a specific ping using its neighbors
     let local_heading = |seg: &[&Ping], end: bool| -> f64 {
         let len = seg.len();
-        if len < 2 { return 0.0; }
+        if len < 2 {
+            return 0.0;
+        }
         let span = (len / 4).clamp(10, 40);
         if end {
             // Heading at the end of the segment: use a broader baseline for stability
@@ -2145,13 +2764,22 @@ fn compute_shared_boundaries(
     };
 
     let seg_half = |i: usize| -> f64 {
-        seg_swath_half_m.get(i).copied().unwrap_or(30.0).clamp(10.0, 300.0)
+        seg_swath_half_m
+            .get(i)
+            .copied()
+            .unwrap_or(30.0)
+            .clamp(10.0, 300.0)
     };
 
     // First boundary: first ping of first segment, heading at start
     let first_ping = segments[0].first().unwrap();
     let h_start = local_heading(segments[0], false);
-    boundaries.push(perp_corners(first_ping.latitude, first_ping.longitude, h_start, seg_half(0)));
+    boundaries.push(perp_corners(
+        first_ping.latitude,
+        first_ping.longitude,
+        h_start,
+        seg_half(0),
+    ));
 
     // Interior boundaries: between segment i-1 and segment i
     for i in 1..n {
@@ -2180,7 +2808,12 @@ fn compute_shared_boundaries(
     // Last boundary: last ping of last segment, heading at end
     let last_ping = segments[n - 1].last().unwrap();
     let h_end = local_heading(segments[n - 1], true);
-    boundaries.push(perp_corners(last_ping.latitude, last_ping.longitude, h_end, seg_half(n - 1)));
+    boundaries.push(perp_corners(
+        last_ping.latitude,
+        last_ping.longitude,
+        h_end,
+        seg_half(n - 1),
+    ));
 
     boundaries
 }
@@ -2199,16 +2832,37 @@ impl BBox {
     fn from_pings(pings: &[Ping]) -> Option<Self> {
         let valid: Vec<_> = pings
             .iter()
-            .filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0))
+            .filter(|p| {
+                p.latitude.is_finite()
+                    && p.longitude.is_finite()
+                    && (p.latitude != 0.0 || p.longitude != 0.0)
+            })
             .collect();
         if valid.is_empty() {
             return None;
         }
-        let min_lat = valid.iter().map(|p| p.latitude).fold(f64::INFINITY, f64::min);
-        let max_lat = valid.iter().map(|p| p.latitude).fold(f64::NEG_INFINITY, f64::max);
-        let min_lon = valid.iter().map(|p| p.longitude).fold(f64::INFINITY, f64::min);
-        let max_lon = valid.iter().map(|p| p.longitude).fold(f64::NEG_INFINITY, f64::max);
-        Some(BBox { min_lat, max_lat, min_lon, max_lon })
+        let min_lat = valid
+            .iter()
+            .map(|p| p.latitude)
+            .fold(f64::INFINITY, f64::min);
+        let max_lat = valid
+            .iter()
+            .map(|p| p.latitude)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let min_lon = valid
+            .iter()
+            .map(|p| p.longitude)
+            .fold(f64::INFINITY, f64::min);
+        let max_lon = valid
+            .iter()
+            .map(|p| p.longitude)
+            .fold(f64::NEG_INFINITY, f64::max);
+        Some(BBox {
+            min_lat,
+            max_lat,
+            min_lon,
+            max_lon,
+        })
     }
 
     fn center_lat(&self) -> f64 {
@@ -2221,9 +2875,8 @@ impl BBox {
     /// Approximate camera range in metres for KML `<LookAt>`.
     fn kml_range_m(&self) -> f64 {
         let lat_km = (self.max_lat - self.min_lat).abs() * 111.0;
-        let lon_km = (self.max_lon - self.min_lon).abs()
-            * 111.0
-            * self.center_lat().to_radians().cos();
+        let lon_km =
+            (self.max_lon - self.min_lon).abs() * 111.0 * self.center_lat().to_radians().cos();
         (lat_km.max(lon_km) * 1000.0 * 2.5).max(200.0)
     }
 
@@ -2237,12 +2890,7 @@ impl BBox {
 
     /// MBTiles spec `center` string: "lon,lat,zoom".
     fn mbtiles_center(&self, zoom: u8) -> String {
-        format!(
-            "{:.6},{:.6},{}",
-            self.center_lon(),
-            self.center_lat(),
-            zoom
-        )
+        format!("{:.6},{:.6},{}", self.center_lon(), self.center_lat(), zoom)
     }
 }
 
@@ -2254,21 +2902,36 @@ pub fn estimate_curvelet_threshold(parsed: &crate::garmin_rsd_parser::ParseResul
     let channels = pings_by_channel(parsed);
     // Prefer sidescan channels; fall back to the channel with most pings.
     let pings: Vec<&crate::garmin_rsd_parser::Ping> = {
-        let sidescan: Vec<_> = channels.values()
-            .filter(|v| v.first().map(|p| [0,1,4,5,8,9,14,15].contains(&p.channel)).unwrap_or(false))
+        let sidescan: Vec<_> = channels
+            .values()
+            .filter(|v| {
+                v.first()
+                    .map(|p| [0, 1, 4, 5, 8, 9, 14, 15].contains(&p.channel))
+                    .unwrap_or(false)
+            })
             .max_by_key(|v| v.len())
             .cloned()
             .unwrap_or_default();
         if !sidescan.is_empty() {
             sidescan
         } else {
-            channels.values().max_by_key(|v| v.len()).cloned().unwrap_or_default()
+            channels
+                .values()
+                .max_by_key(|v| v.len())
+                .cloned()
+                .unwrap_or_default()
         }
     };
-    if pings.is_empty() { return 0.05; }
+    if pings.is_empty() {
+        return 0.05;
+    }
     let probe = render_gray(&pings, 512, 512);
     let (_, suggested) = curvelet_denoise_gray_image(probe, 0.0);
-    if suggested <= 0.0 { 0.05 } else { suggested }
+    if suggested <= 0.0 {
+        0.05
+    } else {
+        suggested
+    }
 }
 
 /// Render before/after preview images (PNG bytes) at a given threshold.
@@ -2280,19 +2943,37 @@ pub fn curvelet_preview_png(
 ) -> (Vec<u8>, Vec<u8>, f32) {
     let channels = pings_by_channel(parsed);
     let pings: Vec<&crate::garmin_rsd_parser::Ping> = {
-        let sidescan: Vec<_> = channels.values()
-            .filter(|v| v.first().map(|p| [0,1,4,5,8,9,14,15].contains(&p.channel)).unwrap_or(false))
+        let sidescan: Vec<_> = channels
+            .values()
+            .filter(|v| {
+                v.first()
+                    .map(|p| [0, 1, 4, 5, 8, 9, 14, 15].contains(&p.channel))
+                    .unwrap_or(false)
+            })
             .max_by_key(|v| v.len())
             .cloned()
             .unwrap_or_default();
-        if !sidescan.is_empty() { sidescan }
-        else { channels.values().max_by_key(|v| v.len()).cloned().unwrap_or_default() }
+        if !sidescan.is_empty() {
+            sidescan
+        } else {
+            channels
+                .values()
+                .max_by_key(|v| v.len())
+                .cloned()
+                .unwrap_or_default()
+        }
     };
     let empty = Vec::new();
-    if pings.is_empty() { return (empty.clone(), empty, 0.05); }
+    if pings.is_empty() {
+        return (empty.clone(), empty, 0.05);
+    }
     let before = render_gray(&pings, 512, 512);
     let (after, suggested) = curvelet_denoise_gray_image(before.clone(), threshold);
-    (gray_to_png_bytes(before), gray_to_png_bytes(after), suggested)
+    (
+        gray_to_png_bytes(before),
+        gray_to_png_bytes(after),
+        suggested,
+    )
 }
 
 fn gray_to_png_bytes(img: GrayImage) -> Vec<u8> {
@@ -2329,11 +3010,11 @@ fn denoise_sigma_filter(img: &GrayImage, threshold: f32) -> GrayImage {
         t * t
     };
 
-    let src = img.as_raw();  // &[u8], row-major
+    let src = img.as_raw(); // &[u8], row-major
     let mut dst = src.to_vec();
 
     // Integer prefix sums (i64) — no f64 in the hot path → ~10× faster in debug
-    let mut psum  = vec![0i64; w + 1];
+    let mut psum = vec![0i64; w + 1];
     let mut psumsq = vec![0i64; w + 1];
 
     for y in 0..h {
@@ -2345,19 +3026,19 @@ fn denoise_sigma_filter(img: &GrayImage, threshold: f32) -> GrayImage {
         psumsq[0] = 0;
         for x in 0..w {
             let v = src_row[x] as i64;
-            psum[x + 1]   = psum[x]   + v;
+            psum[x + 1] = psum[x] + v;
             psumsq[x + 1] = psumsq[x] + v * v;
         }
         for x in 0..w {
             let x0 = x.saturating_sub(half_win);
             let x1 = (x + half_win + 1).min(w);
             let n = (x1 - x0) as i64;
-            let sum   = psum[x1]   - psum[x0];
+            let sum = psum[x1] - psum[x0];
             let sumsq = psumsq[x1] - psumsq[x0];
             // mean * n and variance * n² to keep everything integer
-            let mean_n  = sum;           // mean = sum/n
-            let var_n2  = sumsq * n - sum * sum;  // variance * n² = E[x²]n² - (E[x]n)²
-            // noise_var * n² threshold
+            let mean_n = sum; // mean = sum/n
+            let var_n2 = sumsq * n - sum * sum; // variance * n² = E[x²]n² - (E[x]n)²
+                                                // noise_var * n² threshold
             let noise_n2 = noise_var_i64 * n * n;
             // blend ∈ [0,1]: if var < noise → blend toward mean
             let orig = src_row[x] as i64;
@@ -2371,19 +3052,22 @@ fn denoise_sigma_filter(img: &GrayImage, threshold: f32) -> GrayImage {
                 // Partial blend
                 let blend_num = noise_n2;
                 let blend_den = var_n2.max(1);
-                let blended = (mean_n * blend_num + orig * n * (blend_den - blend_num))
-                    / (n * blend_den);
+                let blended =
+                    (mean_n * blend_num + orig * n * (blend_den - blend_num)) / (n * blend_den);
                 blended.clamp(0, 255) as u8
             };
             dst_row[x] = v;
         }
     }
 
-    GrayImage::from_raw(img.width(), img.height(), dst)
-        .unwrap_or_else(|| img.clone())
+    GrayImage::from_raw(img.width(), img.height(), dst).unwrap_or_else(|| img.clone())
 }
 
-fn curvelet_denoise_gray_image_tagged(img: GrayImage, threshold: f32, tag: &str) -> (GrayImage, f32) {
+fn curvelet_denoise_gray_image_tagged(
+    img: GrayImage,
+    threshold: f32,
+    tag: &str,
+) -> (GrayImage, f32) {
     use std::time::Instant;
     let t0 = Instant::now();
     let (orig_w, orig_h) = (img.width(), img.height());
@@ -2391,42 +3075,52 @@ fn curvelet_denoise_gray_image_tagged(img: GrayImage, threshold: f32, tag: &str)
     if orig_w < 16 || orig_h < 16 {
         eprintln!("[curvelet] {tag}: too small, skipping");
         crate::curvelet_diag::push(crate::curvelet_diag::CurveletDiagEntry {
-            tag: tag.to_string(), width: orig_w as usize, height: orig_h as usize,
+            tag: tag.to_string(),
+            width: orig_w as usize,
+            height: orig_h as usize,
             error: format!("image too small ({orig_w}x{orig_h})"),
             ..Default::default()
         });
         return (img, 0.0);
     }
 
-    // ── FAST DENOISING PATH (threshold > 0) ──────────────────────────────
-    // Apply sigma filter at FULL resolution.  This preserves every pixel at the
-    // original size, removes speckle, and runs in milliseconds rather than
-    // minutes.  The curvelet transform is only used for threshold estimation.
-    if threshold > 0.0 {
-        let half_win = ((threshold * 40.0).round() as usize).clamp(1, 15);
-        eprintln!("[curvelet] {tag}: sigma filter {orig_w}x{orig_h} half_win={half_win}");
-        let out = denoise_sigma_filter(&img, threshold);
-        let elapsed = t0.elapsed().as_millis();
-        eprintln!("[curvelet] {tag}: sigma done in {elapsed}ms");
-        crate::curvelet_diag::push(crate::curvelet_diag::CurveletDiagEntry {
-            tag: tag.to_string(), width: orig_w as usize, height: orig_h as usize,
-            num_scales: 0,
-            threshold_applied: threshold as f64,
-            suggested_threshold: 0.0,
-            elapsed_ms: elapsed as u64,
-            error: String::new(),
-        });
-        return (out, 0.0);
+    let scales_guess = ((orig_w.min(orig_h) as f64).log2() - 2.0).round().clamp(3.0, 6.0) as usize;
+    match crate::internal_fdct::denoise_gray(img.clone(), threshold) {
+        Ok((out, suggested)) => {
+            let elapsed = t0.elapsed().as_millis();
+            eprintln!(
+                "[curvelet] {tag}: {} {orig_w}x{orig_h} threshold={threshold:.4} suggested={suggested:.4} ({elapsed}ms)",
+                crate::internal_fdct::BACKEND_LABEL,
+            );
+            crate::curvelet_diag::push(crate::curvelet_diag::CurveletDiagEntry {
+                tag: tag.to_string(),
+                width: orig_w as usize,
+                height: orig_h as usize,
+                num_scales: scales_guess,
+                threshold_applied: threshold as f64,
+                suggested_threshold: suggested as f64,
+                elapsed_ms: elapsed as u64,
+                error: String::new(),
+            });
+            (out, suggested)
+        }
+        Err(e) => {
+            eprintln!("[curvelet] {tag}: fdct failed ({e}), sigma fallback");
+            let out = denoise_sigma_filter(&img, threshold.max(0.02));
+            let elapsed = t0.elapsed().as_millis();
+            crate::curvelet_diag::push(crate::curvelet_diag::CurveletDiagEntry {
+                tag: tag.to_string(),
+                width: orig_w as usize,
+                height: orig_h as usize,
+                num_scales: 0,
+                threshold_applied: threshold as f64,
+                suggested_threshold: 0.05,
+                elapsed_ms: elapsed as u64,
+                error: e,
+            });
+            (out, 0.05_f32)
+        }
     }
-
-    // ── ESTIMATION PATH (threshold = 0) ─────────────────────────────────
-    // The curvelet forward always returns ~0.05 (MAD clamped to floor) in
-    // practice, and takes 7+ seconds in debug mode.  Skip it — just return
-    // the default suggestion so the caller can decide the threshold.
-    // The full curvelet estimation is available via the `preview_curvelet`
-    // Tauri command (user-initiated, not in the pipeline hot path).
-    eprintln!("[curvelet] {tag}: estimation skipped (use preview for MAD), returning default 0.05");
-    (img, 0.05_f32)
 }
 
 /// Re-colorize a GRAY8 image using a named palette. Fast path for the mosaic
@@ -2464,6 +3158,7 @@ fn write_waterfall_per_channel(
     denoise: bool,
     denoise_threshold: f32,
     denoised_cache: &BTreeMap<u32, GrayImage>,
+    show_payload_debug_overlay: bool,
 ) -> Result<Vec<OutputArtifact>> {
     let channels = pings_by_channel(parsed);
     let mut arts = Vec::new();
@@ -2486,22 +3181,38 @@ fn write_waterfall_per_channel(
                 (cached.clone(), 0.0_f32)
             } else {
                 let raw = render_gray(&render_pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
-                curvelet_denoise_gray_image_tagged(raw, denoise_threshold, &format!("waterfall_ch{ch}"))
+                curvelet_denoise_gray_image_tagged(
+                    raw,
+                    denoise_threshold,
+                    &format!("waterfall_ch{ch}"),
+                )
             }
         } else {
             let raw = render_gray(&render_pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
             (raw, 0.0_f32)
         };
-        let (img_rgb, payload_rows, payload_max_delta) = overlay_extra_payload_magenta(&img, &render_pings);
+        let (img_rgb, payload_rows, payload_max_delta) = if show_payload_debug_overlay {
+            overlay_extra_payload_magenta(&img, &render_pings)
+        } else {
+            let mut rgb: RgbImage = ImageBuffer::new(img.width(), img.height());
+            for (x, y, px) in img.enumerate_pixels() {
+                let g = px.0[0];
+                rgb.put_pixel(x, y, Rgb([g, g, g]));
+            }
+            (rgb, 0, 0)
+        };
         let fname = format!("waterfall_ch{ch}.png");
-        let path  = output_dir.join(&fname);
+        let path = output_dir.join(&fname);
         let denoise_tag = if denoise {
             format!(" · curvelet-denoised (t={used_threshold:.3})")
         } else {
             String::new()
         };
         let payload_tag = if payload_max_delta > 0 {
-            format!(" · payload-delta max={} samples (magenta rows={})", payload_max_delta, payload_rows)
+            format!(
+                " · payload-delta max={} samples (magenta rows={})",
+                payload_max_delta, payload_rows
+            )
         } else {
             String::new()
         };
@@ -2525,6 +3236,7 @@ fn write_waterfall_per_channel(
 }
 
 /// Build the enhanced stitched butterfly mosaic (same pipeline as `mosaic_combined.png`).
+/// Uses EGN, empirical TVG, nadir seam blend, and data-driven port/star orientation.
 pub fn build_stitched_mosaic_rgb(
     parsed: &ParseResult,
     colormap: &str,
@@ -2535,33 +3247,54 @@ pub fn build_stitched_mosaic_rgb(
     discovery: Option<&crate::channel_discovery::DiscoveryResult>,
 ) -> Option<RgbImage> {
     let channels = pings_by_channel(parsed);
-    let (pk, sk) = sidescan_pair;
-    let (pk, sk) = (pk?, sk?);
+    let pk = sidescan_pair.0?;
+    let sk = sidescan_pair.1;
     let port_pings = channels.get(&pk)?;
-    let star_pings = channels.get(&sk)?;
+    let star_pings = sk
+        .and_then(|s| channels.get(&s))
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
     let p_n = port_pings.len();
     let s_n = star_pings.len();
-    let min_n = p_n.min(s_n);
-    let max_n = p_n.max(s_n).max(1);
-    if min_n < 200 || (min_n as f64 / max_n as f64) < 0.12 {
+    if p_n < 200 {
         return None;
+    }
+    if let Some(_) = sk {
+        let min_n = p_n.min(s_n);
+        let max_n = p_n.max(s_n).max(1);
+        if min_n < 200 || (min_n as f64 / max_n as f64) < 0.12 {
+            return None;
+        }
     }
 
     let port_lbl = channel_label(parsed, pk);
-    let star_lbl = channel_label(parsed, sk);
     let port_role = egn_role_from_label(&port_lbl, pk);
-    let star_role = egn_role_from_label(&star_lbl, sk);
     let port_egn = apply_egn_to_channel_pings(port_pings, port_role);
-    let star_egn = apply_egn_to_channel_pings(star_pings, star_role);
+    let star_egn = sk.map(|sk| {
+        let star_lbl = channel_label(parsed, sk);
+        let star_role = egn_role_from_label(&star_lbl, sk);
+        apply_egn_to_channel_pings(star_pings, star_role)
+    });
+    if sk.is_none() {
+        eprintln!(
+            "[channel-probe] single-wing mosaic ch{pk} — GT51/export layout; downscan nadir fill if present"
+        );
+    }
     let port_refs: Vec<&Ping> = port_egn.iter().collect();
-    let star_refs: Vec<&Ping> = star_egn.iter().collect();
+    let star_refs: Vec<&Ping> = star_egn
+        .as_ref()
+        .map(|v| v.iter().collect())
+        .unwrap_or_default();
 
-    let down_ch = if nadir_mode == "fill" {
+    let down_ch = if nadir_mode == "fill" || sk.is_none() {
         channels
             .keys()
             .copied()
-            .filter(|&ch| ch != pk && ch != sk)
-            .filter(|&ch| channel_label(parsed, ch).contains("downscan"))
+            .filter(|&ch| ch != pk && sk.map_or(true, |s| ch != s))
+            .filter(|&ch| {
+                channel_label(parsed, ch).contains("downscan")
+                    || crate::channel_discovery::is_known_downscan_channel_id(ch)
+            })
             .max_by_key(|&ch| channels.get(&ch).map(|v| v.len()).unwrap_or(0))
     } else {
         None
@@ -2571,8 +3304,16 @@ pub fn build_stitched_mosaic_rgb(
         .and_then(|dc| channels.get(&dc))
         .unwrap_or(&empty_pings);
 
-    let port_max_w = port_refs.iter().map(|p| p.samples.len() as u32).max().unwrap_or(512);
-    let star_max_w = star_refs.iter().map(|p| p.samples.len() as u32).max().unwrap_or(512);
+    let port_max_w = port_refs
+        .iter()
+        .map(|p| p.samples.len() as u32)
+        .max()
+        .unwrap_or(512);
+    let star_max_w = star_refs
+        .iter()
+        .map(|p| p.samples.len() as u32)
+        .max()
+        .unwrap_or(512);
     let dynamic_w = port_max_w.max(star_max_w).min(WATERFALL_MAX_W / 2);
 
     render_sidescan_stitched(
@@ -2586,7 +3327,7 @@ pub fn build_stitched_mosaic_rgb(
         nadir_mode != "raw",
         alignments,
         Some(pk),
-        Some(sk),
+        sk,
         parsed,
         discovery,
     )
@@ -2622,8 +3363,11 @@ fn write_mosaic_per_channel(
                 cached.clone()
             } else {
                 let gray = render_gray(pings, WATERFALL_MAX_W, WATERFALL_MAX_H);
-                let (d, _) = curvelet_denoise_gray_image_tagged(gray, denoise_threshold,
-                    &format!("mosaic_ch{ch}"));
+                let (d, _) = curvelet_denoise_gray_image_tagged(
+                    gray,
+                    denoise_threshold,
+                    &format!("mosaic_ch{ch}"),
+                );
                 d
             };
             colorize_gray_image(&denoised, colormap)
@@ -2636,14 +3380,18 @@ fn write_mosaic_per_channel(
             String::new()
         };
         let fname = format!("mosaic_ch{ch}.png");
-        let path  = output_dir.join(&fname);
+        let path = output_dir.join(&fname);
         match img.save(&path) {
             Ok(()) => arts.push(OutputArtifact {
                 kind: "mosaic".to_string(),
                 path: path.display().to_string(),
                 details: format!(
                     "Ch {} ({}) · {}×{} · {} palette{denoise_tag}",
-                    ch, ch_label, img.width(), img.height(), colormap
+                    ch,
+                    ch_label,
+                    img.width(),
+                    img.height(),
+                    colormap
                 ),
             }),
             Err(e) => arts.push(OutputArtifact {
@@ -2654,9 +3402,36 @@ fn write_mosaic_per_channel(
         }
     }
 
-    // Stitched butterfly mosaic: use pre-computed channel pair (coverage + overlap).
+    // Stitched butterfly or single-wing mosaic (GT51 export: ch4 + ch6 downscan).
     let (port_key, star_key) = sidescan_pair;
-    if let (Some(pk), Some(sk)) = (port_key, star_key) {
+    if let (Some(pk), sk_opt) = (port_key, star_key) {
+        if sk_opt.is_none() {
+            if let Some(combined) = build_stitched_mosaic_rgb(
+                parsed,
+                colormap,
+                remove_water_column,
+                if nadir_mode == "raw" { "raw" } else { "fill" },
+                alignments,
+                (Some(pk), None),
+                discovery,
+            ) {
+                let path = output_dir.join("mosaic_combined.png");
+                if combined.save(&path).is_ok() {
+                    arts.push(OutputArtifact {
+                        kind: "mosaic_combined".to_string(),
+                        path: path.display().to_string(),
+                        details: format!(
+                            "Single-wing ch{pk} + downscan nadir fill · {}×{} · {} palette",
+                            combined.width(),
+                            combined.height(),
+                            colormap
+                        ),
+                    });
+                }
+            }
+            return Ok(arts);
+        }
+        let sk = sk_opt.unwrap();
         let p_n = channels.get(&pk).map(|v| v.len()).unwrap_or(0);
         let s_n = channels.get(&sk).map(|v| v.len()).unwrap_or(0);
         let min_n = p_n.min(s_n);
@@ -2735,8 +3510,7 @@ fn tile_to_lon(x: u32, zoom: u32) -> f64 {
 }
 
 fn tile_to_lat(y: u32, zoom: u32) -> f64 {
-    let n = std::f64::consts::PI
-        - 2.0 * std::f64::consts::PI * y as f64 / (1u64 << zoom) as f64;
+    let n = std::f64::consts::PI - 2.0 * std::f64::consts::PI * y as f64 / (1u64 << zoom) as f64;
     n.sinh().atan().to_degrees()
 }
 
@@ -2760,7 +3534,7 @@ fn compute_max_zoom(bbox: &BBox) -> u32 {
 /// placed at the correct geographic position within the tile.
 fn write_mbtiles(
     parsed: &ParseResult,
-    path:   &Path,
+    path: &Path,
     colormap: &str,
     remove_water_column: bool,
 ) -> Result<()> {
@@ -2789,14 +3563,14 @@ fn write_mbtiles(
     let center_str = bbox.mbtiles_center(max_zoom as u8);
 
     for (name, value) in &[
-        ("name",        "SonarSniffer Mosaic"),
+        ("name", "SonarSniffer Mosaic"),
         ("description", &format!("{} pings", parsed.pings.len())),
-        ("type",        "overlay"),
-        ("format",      "webp"),
-        ("minzoom",     &min_zoom.to_string()),
-        ("maxzoom",     &max_zoom.to_string()),
-        ("bounds",      &bounds_str),
-        ("center",      &center_str),
+        ("type", "overlay"),
+        ("format", "webp"),
+        ("minzoom", &min_zoom.to_string()),
+        ("maxzoom", &max_zoom.to_string()),
+        ("bounds", &bounds_str),
+        ("center", &center_str),
     ] {
         conn.execute(
             "INSERT INTO metadata (name, value) VALUES (?1, ?2)",
@@ -2808,19 +3582,23 @@ fn write_mbtiles(
     // Prefer sidescan over downscan/depth for georeferenced outputs (wide swath).
     let channels = pings_by_channel(parsed);
     let dominant: Vec<&Ping> = {
-        let sidescan_best = channels.iter()
+        let sidescan_best = channels
+            .iter()
             .filter(|(&ch, _)| {
                 let label = channel_label(parsed, ch);
                 label.contains("sidescan")
             })
             .max_by_key(|(_, v)| v.len());
-        let best = sidescan_best
-            .or_else(|| channels.iter().max_by_key(|(_, v)| v.len()));
+        let best = sidescan_best.or_else(|| channels.iter().max_by_key(|(_, v)| v.len()));
         best.map(|(_, v)| v.clone()).unwrap_or_default()
     };
     let gps_pings: Vec<&Ping> = dominant
         .iter()
-        .filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0))
+        .filter(|p| {
+            p.latitude.is_finite()
+                && p.longitude.is_finite()
+                && (p.latitude != 0.0 || p.longitude != 0.0)
+        })
         .copied()
         .collect();
     if gps_pings.is_empty() {
@@ -2847,8 +3625,11 @@ fn write_mbtiles(
 
     // Swath half-width from median depth
     let median_depth = {
-        let mut depths: Vec<f64> =
-            gps_pings.iter().map(|p| p.depth_m as f64).filter(|&d| d > 0.0).collect();
+        let mut depths: Vec<f64> = gps_pings
+            .iter()
+            .map(|p| p.depth_m as f64)
+            .filter(|&d| d > 0.0)
+            .collect();
         if depths.is_empty() {
             depths.push(5.0);
         }
@@ -2878,7 +3659,15 @@ fn write_mbtiles(
         .enumerate()
         .map(|(i, ping)| {
             let skip = nadir_offsets.get(i).copied().unwrap_or(0);
-            ping_to_gray_row_normed(ping, skip, swath_px, MOSAIC_GAMMA, seg_p2, seg_p98, &tvg_lut)
+            ping_to_gray_row_normed(
+                ping,
+                skip,
+                swath_px,
+                MOSAIC_GAMMA,
+                seg_p2,
+                seg_p98,
+                &tvg_lut,
+            )
         })
         .collect();
 
@@ -2891,8 +3680,7 @@ fn write_mbtiles(
         // Pad the bbox to catch tiles at the edges of the swath
         let pad_lat = swath_half_m / 111_320.0;
         let center_lat = (bbox.min_lat + bbox.max_lat) / 2.0;
-        let pad_lon =
-            swath_half_m / (111_320.0 * center_lat.to_radians().cos().max(0.01));
+        let pad_lon = swath_half_m / (111_320.0 * center_lat.to_radians().cos().max(0.01));
 
         let min_tx = lon_to_tile_x(bbox.min_lon - pad_lon, z);
         let max_tx = lon_to_tile_x(bbox.max_lon + pad_lon, z).min((n - 1) as u32);
@@ -2901,14 +3689,13 @@ fn write_mbtiles(
 
         for tx in min_tx..=max_tx {
             for ty in min_ty..=max_ty {
-                let tile_west  = tile_to_lon(tx, z);
-                let tile_east  = tile_to_lon(tx + 1, z);
+                let tile_west = tile_to_lon(tx, z);
+                let tile_east = tile_to_lon(tx + 1, z);
                 let tile_north = tile_to_lat(ty, z);
                 let tile_south = tile_to_lat(ty + 1, z);
 
                 let tile_center_lat = (tile_north + tile_south) / 2.0;
-                let m_per_deg_lon =
-                    111_320.0 * tile_center_lat.to_radians().cos().max(0.01);
+                let m_per_deg_lon = 111_320.0 * tile_center_lat.to_radians().cos().max(0.01);
                 let m_per_deg_lat = 111_320.0;
                 let tile_w_m = (tile_east - tile_west) * m_per_deg_lon;
                 let m_per_px = tile_w_m / 256.0;
@@ -2920,8 +3707,7 @@ fn write_mbtiles(
                 for (pi, ping) in gps_pings.iter().enumerate() {
                     // Quick rejection: skip pings far from this tile
                     let dlat_m = (ping.latitude - tile_center_lat) * m_per_deg_lat;
-                    let dlon_m =
-                        (ping.longitude - (tile_west + tile_east) / 2.0) * m_per_deg_lon;
+                    let dlon_m = (ping.longitude - (tile_west + tile_east) / 2.0) * m_per_deg_lon;
                     if dlat_m.abs() > tile_w_m * 1.5 + swath_half_m
                         || dlon_m.abs() > tile_w_m * 1.5 + swath_half_m
                     {
@@ -2934,10 +3720,8 @@ fn write_mbtiles(
                     let cos_p = perp.cos();
 
                     // Ping center in tile pixel coords
-                    let cx =
-                        (ping.longitude - tile_west) / (tile_east - tile_west) * 256.0;
-                    let cy =
-                        (tile_north - ping.latitude) / (tile_north - tile_south) * 256.0;
+                    let cx = (ping.longitude - tile_west) / (tile_east - tile_west) * 256.0;
+                    let cy = (tile_north - ping.latitude) / (tile_north - tile_south) * 256.0;
 
                     // Along-track direction in pixel space (for brush coverage)
                     let along_sin = heading.sin();
@@ -2950,8 +3734,7 @@ fn write_mbtiles(
                         if g == 0 {
                             continue;
                         }
-                        let dist_from_center =
-                            (si as f64 - swath_px as f64 / 2.0) * m_per_sample;
+                        let dist_from_center = (si as f64 - swath_px as f64 / 2.0) * m_per_sample;
                         let px = cx + dist_from_center * sin_p / m_per_px;
                         let py = cy - dist_from_center * cos_p / m_per_px;
 
@@ -2966,7 +3749,12 @@ fn write_mbtiles(
                             if bx >= 0 && bx < 256 && by >= 0 && by < 256 {
                                 // Max-compositing: brighter pixel wins
                                 let existing = tile.get_pixel(bx as u32, by as u32);
-                                if existing[3] == 0 || g > ((existing[0] as u16 + existing[1] as u16 + existing[2] as u16) / 3) as u8 {
+                                if existing[3] == 0
+                                    || g > ((existing[0] as u16
+                                        + existing[1] as u16
+                                        + existing[2] as u16)
+                                        / 3) as u8
+                                {
                                     tile.put_pixel(bx as u32, by as u32, pixel);
                                 }
                                 has_data = true;
@@ -3022,7 +3810,11 @@ fn write_kml(parsed: &ParseResult, path: &Path) -> Result<usize> {
     let track_coords: String = parsed
         .pings
         .iter()
-        .filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0))
+        .filter(|p| {
+            p.latitude.is_finite()
+                && p.longitude.is_finite()
+                && (p.latitude != 0.0 || p.longitude != 0.0)
+        })
         .map(|p| {
             format!(
                 "{:.7},{:.7},{:.1}",
@@ -3041,7 +3833,11 @@ fn write_kml(parsed: &ParseResult, path: &Path) -> Result<usize> {
         .iter()
         .step_by(step)
         .take(KML_MAX_PLACEMARKS)
-        .filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0))
+        .filter(|p| {
+            p.latitude.is_finite()
+                && p.longitude.is_finite()
+                && (p.latitude != 0.0 || p.longitude != 0.0)
+        })
         .map(|p| {
             format!(
                 "    <Placemark>\
@@ -3134,11 +3930,11 @@ Samples: $[sample_count]]]></text>
 /// Each strip is a small PNG rendered from that segment's sonar data and placed
 /// precisely along the track with its four corners defined in lat/lon.
 fn write_kmz(
-    kml_path:   &Path,
-    kmz_path:   &Path,
-    parsed:     &ParseResult,
+    kml_path: &Path,
+    kmz_path: &Path,
+    parsed: &ParseResult,
     _output_dir: &Path,
-    colormap:   &str,
+    colormap: &str,
     remove_water_column: bool,
     alignments: &[crate::channel_alignment::ChannelAlignment],
     sidescan_pair: (Option<u32>, Option<u32>),
@@ -3157,15 +3953,37 @@ fn write_kmz(
     let channels = pings_by_channel(parsed);
     let port_pings: Vec<&Ping> = port_ch
         .and_then(|ch| channels.get(&ch))
-        .map(|v| v.iter().filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0)).copied().collect())
+        .map(|v| {
+            v.iter()
+                .filter(|p| {
+                    p.latitude.is_finite()
+                        && p.longitude.is_finite()
+                        && (p.latitude != 0.0 || p.longitude != 0.0)
+                })
+                .copied()
+                .collect()
+        })
         .unwrap_or_default();
     let star_pings: Vec<&Ping> = star_ch
         .and_then(|ch| channels.get(&ch))
-        .map(|v| v.iter().filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0)).copied().collect())
+        .map(|v| {
+            v.iter()
+                .filter(|p| {
+                    p.latitude.is_finite()
+                        && p.longitude.is_finite()
+                        && (p.latitude != 0.0 || p.longitude != 0.0)
+                })
+                .copied()
+                .collect()
+        })
         .unwrap_or_default();
 
     // Use whichever channel has more pings to drive segmentation & geography
-    let guide_pings: &Vec<&Ping> = if star_pings.len() >= port_pings.len() { &star_pings } else { &port_pings };
+    let guide_pings: &Vec<&Ping> = if star_pings.len() >= port_pings.len() {
+        &star_pings
+    } else {
+        &port_pings
+    };
     if guide_pings.len() < 4 {
         return Ok(false);
     }
@@ -3174,9 +3992,11 @@ fn write_kmz(
     // KMZ: allow segments as small as 12 pings through turns for tighter
     // curve-following with gx:LatLonQuad overlays.
     let (raw_base, seg_heading_thr) = adaptive_segmentation_params(guide_pings);
+    // Short segments through turns keep gx:LatLonQuad overlays planar in Google Earth.
     let seg_base = raw_base.clamp(12, 48);
     let seg_ranges = segment_by_heading(guide_pings, seg_base, seg_heading_thr);
-    let guide_segments: Vec<&[&Ping]> = seg_ranges.iter()
+    let guide_segments: Vec<&[&Ping]> = seg_ranges
+        .iter()
         .map(|&(s, e)| &guide_pings[s..e] as &[&Ping])
         .collect();
 
@@ -3187,45 +4007,53 @@ fn write_kmz(
         .map(|&(s, e)| segment_swath_half_m(&guide_pings[s..e], &guide_offsets[s..e]))
         .collect();
 
-    let mut overlay_kml_parts = Vec::new();
-    let mut png_entries: Vec<(String, Vec<u8>)> = Vec::new();
-
     let boundaries = compute_shared_boundaries(&guide_segments, &seg_swath_half_m);
+
+    struct KmzSegment {
+        strip: image::RgbImage,
+        corners: [(f64, f64); 4],
+        idx: usize,
+    }
+    let mut segments: Vec<KmzSegment> = Vec::new();
 
     // Build a mapping from guide-segment index ranges to the other channel's pings
     // by matching on timestamp proximity
-    let other_pings: &Vec<&Ping> = if star_pings.len() >= port_pings.len() { &port_pings } else { &star_pings };
+    let other_pings: &Vec<&Ping> = if star_pings.len() >= port_pings.len() {
+        &port_pings
+    } else {
+        &star_pings
+    };
 
     // ── Global normalization: compute TVG + percentile norms across the ENTIRE
     // track so all segments share the same contrast range.  This eliminates
     // brightness banding between adjacent segments.
-    let compute_offsets = |pings: &[&Ping]| -> Vec<usize> {
-        if pings.is_empty() { return vec![]; }
-        let raw = detect_per_ping_nadir(pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            vec![median.min(30); pings.len()]
-        }
-    };
+    let port_prof = port_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let star_prof = star_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let compute_offsets =
+        |pings: &[&Ping], prof: Option<&crate::channel_discovery::ChannelProfile>| {
+            compute_nadir_skip_offsets(pings, true, prof)
+        };
     let global_port_norm = if !port_pings.is_empty() {
-        let offsets = compute_offsets(&port_pings);
+        let offsets = compute_offsets(&port_pings, port_prof);
         let tvg = compute_empirical_tvg(&port_pings, &offsets);
         let (p2, p98) = compute_segment_norm(&port_pings, &offsets, &tvg);
         Some(PrecomputedNorm { tvg, p2, p98 })
-    } else { None };
+    } else {
+        None
+    };
     let global_star_norm = if !star_pings.is_empty() {
-        let offsets = compute_offsets(&star_pings);
+        let offsets = compute_offsets(&star_pings, star_prof);
         let tvg = compute_empirical_tvg(&star_pings, &offsets);
         let (p2, p98) = compute_segment_norm(&star_pings, &offsets, &tvg);
         Some(PrecomputedNorm { tvg, p2, p98 })
-    } else { None };
+    } else {
+        None
+    };
 
     for (seg_idx, seg_guide) in guide_segments.iter().enumerate() {
-        if seg_guide.len() < 2 { continue; }
+        if seg_guide.len() < 2 {
+            continue;
+        }
 
         let ((sl_lon, sl_lat), (sr_lon, sr_lat)) = boundaries[seg_idx];
         let ((el_lon, el_lat), (er_lon, er_lat)) = boundaries[seg_idx + 1];
@@ -3236,19 +4064,22 @@ fn write_kmz(
         // Image bottom (last row) = last ping = END of segment
         // Left half = port, Right half = starboard
         let corners: [(f64, f64); 4] = [
-            (el_lon, el_lat),  // bottom-left  = end-port
-            (er_lon, er_lat),  // bottom-right = end-starboard
-            (sr_lon, sr_lat),  // top-right    = start-starboard
-            (sl_lon, sl_lat),  // top-left     = start-port
+            (el_lon, el_lat), // bottom-left  = end-port
+            (er_lon, er_lat), // bottom-right = end-starboard
+            (sr_lon, sr_lat), // top-right    = start-starboard
+            (sl_lon, sl_lat), // top-left     = start-port
         ];
 
-        let seg_w = 256u32;
-        let seg_h = (seg_guide.len() as u32).min(256).max(1);
+        let seg_w = KMZ_OVERLAY_WIDTH;
+        let seg_h = (seg_guide.len() as u32)
+            .min(KMZ_OVERLAY_MAX_HEIGHT)
+            .max(1);
 
         // Find matching pings in the other channel by timestamp range
         let ts_start = seg_guide.first().map(|p| p.timestamp_ms).unwrap_or(0);
-        let ts_end   = seg_guide.last().map(|p| p.timestamp_ms).unwrap_or(u64::MAX);
-        let seg_other: Vec<&Ping> = other_pings.iter()
+        let ts_end = seg_guide.last().map(|p| p.timestamp_ms).unwrap_or(u64::MAX);
+        let seg_other: Vec<&Ping> = other_pings
+            .iter()
             .filter(|p| p.timestamp_ms >= ts_start && p.timestamp_ms <= ts_end)
             .copied()
             .collect();
@@ -3265,21 +4096,50 @@ fn write_kmz(
         let strip = render_stitched_overlay_strip(
             &seg_port.iter().copied().collect::<Vec<_>>(),
             &seg_star.iter().copied().collect::<Vec<_>>(),
-            seg_w, seg_h, colormap, remove_water_column,
-            alignments, port_ch, star_ch,
-            global_port_norm.as_ref(), global_star_norm.as_ref(),
+            seg_w,
+            seg_h,
+            colormap,
+            remove_water_column,
+            alignments,
+            port_ch,
+            star_ch,
+            global_port_norm.as_ref(),
+            global_star_norm.as_ref(),
             parsed,
             discovery,
         );
 
-        // Light feathering for KMZ: just enough to soften segment seams in
-        // Google Earth without creating visible gaps.
-        let rgba_strip = apply_alpha_feathering(&strip, 0.04, 0.02);
+        segments.push(KmzSegment {
+            strip,
+            corners,
+            idx: seg_idx,
+        });
+    }
 
-        let png_name = format!("seg_{:04}.webp", seg_idx);
-        if let Ok(bytes) = encode_webp_rgba(&rgba_strip) {
-            // drawOrder increases with segment index so later passes (rescans)
-            // paint over earlier ones, showing the most recent/best data.
+    if segments.is_empty() {
+        return Ok(false);
+    }
+
+    // Along-track registration: satellite-style NCC on overlap bands between strips.
+    {
+        let cfg = crate::overlay_align::AlignConfig::default();
+        for i in 1..segments.len() {
+            let (left, right) = segments.split_at_mut(i);
+            crate::overlay_align::align_strip_pair(&left[i - 1].strip, &mut right[0].strip, &cfg);
+        }
+    }
+
+    let mut overlay_kml_parts = Vec::new();
+    let mut png_entries: Vec<(String, Vec<u8>)> = Vec::new();
+
+    for seg in &segments {
+        let strip = crate::overlay_align::mask_dropout_rows(&seg.strip);
+        // Light edge feather only — heavy Y feather softens detail in Google Earth.
+        let rgba_strip = apply_alpha_feathering(&strip, 0.03, 0.04);
+
+        // Lossless PNG for GE sharpness (WebP from image crate is often lossy).
+        let png_name = format!("seg_{:04}.png", seg.idx);
+        if let Ok(bytes) = encode_png_rgba(&rgba_strip) {
             overlay_kml_parts.push(format!(
                 "  <GroundOverlay>\
                 \n    <name>Segment {}</name>\
@@ -3292,13 +4152,46 @@ fn write_kmz(
                 \n      <coordinates>{:.7},{:.7},0 {:.7},{:.7},0 {:.7},{:.7},0 {:.7},{:.7},0</coordinates>\
                 \n    </gx:LatLonQuad>\
                 \n  </GroundOverlay>",
-                seg_idx, seg_idx + 1, png_name,
-                corners[0].0, corners[0].1,  // lower-left
-                corners[1].0, corners[1].1,  // lower-right
-                corners[2].0, corners[2].1,  // upper-right
-                corners[3].0, corners[3].1,  // upper-left
+                seg.idx,
+                seg.idx + 1,
+                png_name,
+                seg.corners[0].0,
+                seg.corners[0].1,
+                seg.corners[1].0,
+                seg.corners[1].1,
+                seg.corners[2].0,
+                seg.corners[2].1,
+                seg.corners[3].0,
+                seg.corners[3].1,
             ));
             png_entries.push((png_name, bytes));
+        } else if let Ok(bytes) = encode_webp_rgba(&rgba_strip) {
+            let webp_name = format!("seg_{:04}.webp", seg.idx);
+            overlay_kml_parts.push(format!(
+                "  <GroundOverlay>\
+                \n    <name>Segment {}</name>\
+                \n    <color>ffffffff</color>\
+                \n    <drawOrder>{}</drawOrder>\
+                \n    <Icon><href>{}</href></Icon>\
+                \n    <altitude>0</altitude>\
+                \n    <altitudeMode>clampToGround</altitudeMode>\
+                \n    <gx:LatLonQuad>\
+                \n      <coordinates>{:.7},{:.7},0 {:.7},{:.7},0 {:.7},{:.7},0 {:.7},{:.7},0</coordinates>\
+                \n    </gx:LatLonQuad>\
+                \n  </GroundOverlay>",
+                seg.idx,
+                seg.idx + 1,
+                webp_name,
+                seg.corners[0].0,
+                seg.corners[0].1,
+                seg.corners[1].0,
+                seg.corners[1].1,
+                seg.corners[2].0,
+                seg.corners[2].1,
+                seg.corners[3].0,
+                seg.corners[3].1,
+            ));
+            png_entries.push((webp_name, bytes));
         }
     }
 
@@ -3336,7 +4229,9 @@ fn write_kmz(
 }
 
 #[derive(serde::Serialize)]
-struct ArcGisSpatialRef { wkid: u32 }
+struct ArcGisSpatialRef {
+    wkid: u32,
+}
 #[derive(serde::Serialize)]
 struct ArcGisPoint {
     x: f64,
@@ -3376,7 +4271,7 @@ fn write_arcgis_sidecar(parsed: &ParseResult, path: &Path) -> Result<()> {
                 geometry: ArcGisPoint {
                     x: p.longitude,
                     y: p.latitude,
-                    spatial_reference: ArcGisSpatialRef { wkid: 4326 }
+                    spatial_reference: ArcGisSpatialRef { wkid: 4326 },
                 },
                 attributes: ArcGisAttributes {
                     sequence: p.sequence,
@@ -3392,7 +4287,7 @@ fn write_arcgis_sidecar(parsed: &ParseResult, path: &Path) -> Result<()> {
                     bottom_type,
                     channel: p.channel as u16,
                     sample_count: p.sample_count as u16,
-                }
+                },
             }
         })
         .collect();
@@ -3467,55 +4362,80 @@ fn estimate_bottom_hardness(samples: &[u16]) -> (Option<f32>, &'static str) {
     (Some((hardness * 1000.0).round() / 1000.0), label)
 }
 
-fn write_native_viewer(parsed: &ParseResult, viewer_dir: &Path, colormap: &str, remove_water_column: bool, detections: Option<&DetectionSummary>, alignments: &[crate::channel_alignment::ChannelAlignment], enable_nautical_charts: bool, sidescan_pair: (Option<u32>, Option<u32>), discovery: Option<&crate::channel_discovery::DiscoveryResult>) -> Result<()> {
+fn write_native_viewer(
+    parsed: &ParseResult,
+    viewer_dir: &Path,
+    colormap: &str,
+    remove_water_column: bool,
+    detections: Option<&DetectionSummary>,
+    alignments: &[crate::channel_alignment::ChannelAlignment],
+    enable_nautical_charts: bool,
+    sidescan_pair: (Option<u32>, Option<u32>),
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
+) -> Result<()> {
     fs::create_dir_all(viewer_dir)
         .with_context(|| format!("Failed to create viewer dir: {}", viewer_dir.display()))?;
 
     // ── Build GeoJSON values ──────────────────────────────────────────────────
-#[derive(serde::Serialize)]
-      struct GeoJsonLineString {
-          #[serde(rename = "type")]
-          geom_type: &'static str,
-          coordinates: Vec<[f64; 2]>,
-      }
-      #[derive(serde::Serialize)]
-      struct GeoJsonFeatureProp { name: &'static str }
-      #[derive(serde::Serialize)]
-      struct GeoJsonFeature {
-          #[serde(rename = "type")]
-          feat_type: &'static str,
-          geometry: GeoJsonLineString,
-          properties: GeoJsonFeatureProp,
-      }
-      #[derive(serde::Serialize)]
-      struct GeoJsonFeatureCol {
-          #[serde(rename = "type")]
-          col_type: &'static str,
-          features: Vec<GeoJsonFeature>,
-      }
+    #[derive(serde::Serialize)]
+    struct GeoJsonLineString {
+        #[serde(rename = "type")]
+        geom_type: &'static str,
+        coordinates: Vec<[f64; 2]>,
+    }
+    #[derive(serde::Serialize)]
+    struct GeoJsonFeatureProp {
+        name: &'static str,
+    }
+    #[derive(serde::Serialize)]
+    struct GeoJsonFeature {
+        #[serde(rename = "type")]
+        feat_type: &'static str,
+        geometry: GeoJsonLineString,
+        properties: GeoJsonFeatureProp,
+    }
+    #[derive(serde::Serialize)]
+    struct GeoJsonFeatureCol {
+        #[serde(rename = "type")]
+        col_type: &'static str,
+        features: Vec<GeoJsonFeature>,
+    }
 
-      let track_coords: Vec<[f64; 2]> = parsed
-          .pings
-          .iter()
-          .filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0))
-          .map(|p| [p.longitude, p.latitude])
-          .collect();
+    let track_coords: Vec<[f64; 2]> = parsed
+        .pings
+        .iter()
+        .filter(|p| {
+            p.latitude.is_finite()
+                && p.longitude.is_finite()
+                && (p.latitude != 0.0 || p.longitude != 0.0)
+        })
+        .map(|p| [p.longitude, p.latitude])
+        .collect();
 
-      let track_geojson = GeoJsonFeatureCol {
-          col_type: "FeatureCollection",
-          features: vec![GeoJsonFeature {
-              feat_type: "Feature",
-              geometry: GeoJsonLineString { geom_type: "LineString", coordinates: track_coords },
-              properties: GeoJsonFeatureProp { name: "Sonar track" }
-          }]
-      };
+    let track_geojson = GeoJsonFeatureCol {
+        col_type: "FeatureCollection",
+        features: vec![GeoJsonFeature {
+            feat_type: "Feature",
+            geometry: GeoJsonLineString {
+                geom_type: "LineString",
+                coordinates: track_coords,
+            },
+            properties: GeoJsonFeatureProp {
+                name: "Sonar track",
+            },
+        }],
+    };
 
     let step = (parsed.pings.len() / VIEWER_MAX_PINGS).max(1);
     let ping_features: Vec<_> = parsed
         .pings
         .iter()
         .step_by(step)
-        .filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0))
+        .filter(|p| {
+            p.latitude.is_finite()
+                && p.longitude.is_finite()
+                && (p.latitude != 0.0 || p.longitude != 0.0)
+        })
         .map(|p| {
             let (bottom_hardness, bottom_type) = estimate_bottom_hardness(&p.samples);
             serde_json::json!({
@@ -3556,7 +4476,15 @@ fn write_native_viewer(parsed: &ParseResult, viewer_dir: &Path, colormap: &str, 
     // ── Generate sonar overlay strips (same geometry as KMZ) ──────────────────
     // Renders sidescan segments as PNG files + a JSON manifest so the viewer can
     // display them as MapLibre `image` sources along the track.
-    let sonar_overlays = generate_viewer_sonar_overlays(parsed, viewer_dir, colormap, remove_water_column, alignments, sidescan_pair, discovery)?;
+    let sonar_overlays = generate_viewer_sonar_overlays(
+        parsed,
+        viewer_dir,
+        colormap,
+        remove_water_column,
+        alignments,
+        sidescan_pair,
+        discovery,
+    )?;
     let overlays_json_str = serde_json::to_string(&sonar_overlays)?;
 
     // ── data.js – inline GeoJSON as globals so index.html works via file:// ──
@@ -3575,8 +4503,7 @@ fn write_native_viewer(parsed: &ParseResult, viewer_dir: &Path, colormap: &str, 
         var DETECTIONS_GEOJSON = {};\n",
         track_json_str, pings_json_str, overlays_json_str, detections_json_str
     );
-    fs::write(viewer_dir.join("data.js"), data_js)
-        .context("Failed to write viewer data.js")?;
+    fs::write(viewer_dir.join("data.js"), data_js).context("Failed to write viewer data.js")?;
 
     // ── index.html ────────────────────────────────────────────────────────────
     let html = r#"<!doctype html>
@@ -3644,10 +4571,10 @@ fn write_native_viewer(parsed: &ParseResult, viewer_dir: &Path, colormap: &str, 
 "#;
 
     // ── app.js – reads from inline globals; no fetch() ────────────────────────
-// OSM is always the base layer. NOAA Seamless RNC chart tiles are added on top
-      // when the nautical charts option is enabled. Both are served with CORS headers.
-      let js_sources = if enable_nautical_charts {
-          r#"
+    // OSM is always the base layer. NOAA Seamless RNC chart tiles are added on top
+    // when the nautical charts option is enabled. Both are served with CORS headers.
+    let js_sources = if enable_nautical_charts {
+        r#"
         osm: {
           type: 'raster',
           tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
@@ -3671,14 +4598,15 @@ fn write_native_viewer(parsed: &ParseResult, viewer_dir: &Path, colormap: &str, 
       }
         "#
     };
-    
+
     let js_layers = if enable_nautical_charts {
         "[{ id: 'osm', type: 'raster', source: 'osm' }, { id: 'noaa_rnc', type: 'raster', source: 'noaa_rnc', paint: {'raster-opacity': 0.8} }]"
     } else {
         "[{ id: 'osm', type: 'raster', source: 'osm' }]"
     };
 
-    let js_header = format!(r#"const map = new maplibregl.Map({{
+    let js_header = format!(
+        r#"const map = new maplibregl.Map({{
   container: 'map',
   style: {{
     version: 8,
@@ -3688,15 +4616,20 @@ fn write_native_viewer(parsed: &ParseResult, viewer_dir: &Path, colormap: &str, 
   center: [-90, 30],
   zoom: 3
 }});
-"#, js_sources, js_layers);
+"#,
+        js_sources, js_layers
+    );
 
     let js_body = r#"
 // TRACK_GEOJSON, PINGS_GEOJSON, SONAR_OVERLAYS, DETECTIONS_GEOJSON are declared in data.js
 function load() {"#;
 
     let js = format!("{}{}", js_header, js_body);
-    
-    let js = format!("{}{}", js, r#"
+
+    let js = format!(
+        "{}{}",
+        js,
+        r#"
   const trackGeo = TRACK_GEOJSON;
   const pingsGeo = PINGS_GEOJSON;
   const overlays = (typeof SONAR_OVERLAYS !== 'undefined') ? SONAR_OVERLAYS : [];
@@ -3920,7 +4853,8 @@ function load() {"#;
 }
 
 load();
-"#);
+"#
+    );
 
     fs::write(viewer_dir.join("index.html"), html).context("Failed to write viewer index.html")?;
     fs::write(viewer_dir.join("app.js"), js).context("Failed to write viewer app.js")?;
@@ -3929,28 +4863,32 @@ load();
 
 /// Build a GeoJSON FeatureCollection from detection results.
 fn build_detections_geojson(det: &DetectionSummary) -> serde_json::Value {
-    let features: Vec<serde_json::Value> = det.detections.iter().map(|d| {
-        serde_json::json!({
-            "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [d.longitude, d.latitude]
-            },
-            "properties": {
-                "classification": d.classification,
-                "size_class": d.size_class,
-                "blob_area": d.blob_area,
-                "width_m": (d.width_m * 10.0).round() / 10.0,
-                "length_m": (d.length_m * 10.0).round() / 10.0,
-                "avg_intensity": (d.avg_intensity * 10.0).round() / 10.0,
-                "confidence": (d.confidence * 100.0).round() / 100.0,
-                "depth_m": (d.depth_m * 100.0).round() / 100.0,
-                "range_m": (d.range_m * 100.0).round() / 100.0,
-                "channel": d.channel,
-                "channel_type": d.channel_type,
-            }
+    let features: Vec<serde_json::Value> = det
+        .detections
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [d.longitude, d.latitude]
+                },
+                "properties": {
+                    "classification": d.classification,
+                    "size_class": d.size_class,
+                    "blob_area": d.blob_area,
+                    "width_m": (d.width_m * 10.0).round() / 10.0,
+                    "length_m": (d.length_m * 10.0).round() / 10.0,
+                    "avg_intensity": (d.avg_intensity * 10.0).round() / 10.0,
+                    "confidence": (d.confidence * 100.0).round() / 100.0,
+                    "depth_m": (d.depth_m * 100.0).round() / 100.0,
+                    "range_m": (d.range_m * 100.0).round() / 100.0,
+                    "channel": d.channel,
+                    "channel_type": d.channel_type,
+                }
+            })
         })
-    }).collect();
+        .collect();
 
     serde_json::json!({
         "type": "FeatureCollection",
@@ -3979,23 +4917,47 @@ fn generate_viewer_sonar_overlays(
     let channels = pings_by_channel(parsed);
     let port_pings: Vec<&Ping> = port_ch
         .and_then(|ch| channels.get(&ch))
-        .map(|v| v.iter().filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0)).copied().collect())
+        .map(|v| {
+            v.iter()
+                .filter(|p| {
+                    p.latitude.is_finite()
+                        && p.longitude.is_finite()
+                        && (p.latitude != 0.0 || p.longitude != 0.0)
+                })
+                .copied()
+                .collect()
+        })
         .unwrap_or_default();
     let star_pings: Vec<&Ping> = star_ch
         .and_then(|ch| channels.get(&ch))
-        .map(|v| v.iter().filter(|p| p.latitude.is_finite() && p.longitude.is_finite() && (p.latitude != 0.0 || p.longitude != 0.0)).copied().collect())
+        .map(|v| {
+            v.iter()
+                .filter(|p| {
+                    p.latitude.is_finite()
+                        && p.longitude.is_finite()
+                        && (p.latitude != 0.0 || p.longitude != 0.0)
+                })
+                .copied()
+                .collect()
+        })
         .unwrap_or_default();
 
-    let guide_pings: &Vec<&Ping> = if star_pings.len() >= port_pings.len() { &star_pings } else { &port_pings };
-    if guide_pings.len() < 4 { return Ok(vec![]); }
+    let guide_pings: &Vec<&Ping> = if star_pings.len() >= port_pings.len() {
+        &star_pings
+    } else {
+        &port_pings
+    };
+    if guide_pings.len() < 4 {
+        return Ok(vec![]);
+    }
 
-    // Viewer overlays: use larger segments (floor=200 pings) to keep the total
-    // number of image sources manageable for MapLibre's WebGL renderer.
-    // 40K pings / 200 = ~200 overlays (vs 800+ with floor=50).
+    // Viewer overlays: moderate segment length — long segments ribbon on curves and
+    // leave visible gaps; cap overlay count for MapLibre WebGL limits.
     let (raw_base, seg_heading_thr) = adaptive_segmentation_params(guide_pings);
     let seg_base = raw_base.clamp(40, 100);
     let seg_ranges = segment_by_heading(guide_pings, seg_base, seg_heading_thr);
-    let guide_segments: Vec<&[&Ping]> = seg_ranges.iter()
+    let guide_segments: Vec<&[&Ping]> = seg_ranges
+        .iter()
         .map(|&(s, e)| &guide_pings[s..e] as &[&Ping])
         .collect();
 
@@ -4009,40 +4971,48 @@ fn generate_viewer_sonar_overlays(
     let sonar_dir = viewer_dir.join("sonar");
     fs::create_dir_all(&sonar_dir).context("create viewer sonar dir")?;
 
-    let mut result = Vec::new();
-
     let boundaries = compute_shared_boundaries(&guide_segments, &seg_swath_half_m);
 
-    let other_pings: &Vec<&Ping> = if star_pings.len() >= port_pings.len() { &port_pings } else { &star_pings };
+    struct ViewerSegment {
+        strip: image::RgbImage,
+        corners: [(f64, f64); 4],
+        idx: usize,
+    }
+    let mut segments: Vec<ViewerSegment> = Vec::new();
 
-    // ── Global normalization for consistent cross-segment brightness ──────────
-    let compute_offsets_v = |pings: &[&Ping]| -> Vec<usize> {
-        if pings.is_empty() { return vec![]; }
-        let raw = detect_per_ping_nadir(pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            vec![median.min(30); pings.len()]
-        }
+    let other_pings: &Vec<&Ping> = if star_pings.len() >= port_pings.len() {
+        &port_pings
+    } else {
+        &star_pings
     };
+
+    let port_prof_v = port_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let star_prof_v = star_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let compute_offsets_v =
+        |pings: &[&Ping], prof: Option<&crate::channel_discovery::ChannelProfile>| {
+            compute_nadir_skip_offsets(pings, true, prof)
+        };
     let global_port_norm_v = if !port_pings.is_empty() {
-        let offsets = compute_offsets_v(&port_pings);
+        let offsets = compute_offsets_v(&port_pings, port_prof_v);
         let tvg = compute_empirical_tvg(&port_pings, &offsets);
         let (p2, p98) = compute_segment_norm(&port_pings, &offsets, &tvg);
         Some(PrecomputedNorm { tvg, p2, p98 })
-    } else { None };
+    } else {
+        None
+    };
     let global_star_norm_v = if !star_pings.is_empty() {
-        let offsets = compute_offsets_v(&star_pings);
+        let offsets = compute_offsets_v(&star_pings, star_prof_v);
         let tvg = compute_empirical_tvg(&star_pings, &offsets);
         let (p2, p98) = compute_segment_norm(&star_pings, &offsets, &tvg);
         Some(PrecomputedNorm { tvg, p2, p98 })
-    } else { None };
+    } else {
+        None
+    };
 
     for (seg_idx, seg_guide) in guide_segments.iter().enumerate() {
-        if seg_guide.len() < 2 { continue; }
+        if seg_guide.len() < 2 {
+            continue;
+        }
 
         let ((sl_lon, sl_lat), (sr_lon, sr_lat)) = boundaries[seg_idx];
         let ((el_lon, el_lat), (er_lon, er_lat)) = boundaries[seg_idx + 1];
@@ -4052,8 +5022,9 @@ fn generate_viewer_sonar_overlays(
 
         // Find matching pings in the other channel by timestamp range
         let ts_start = seg_guide.first().map(|p| p.timestamp_ms).unwrap_or(0);
-        let ts_end   = seg_guide.last().map(|p| p.timestamp_ms).unwrap_or(u64::MAX);
-        let seg_other: Vec<&Ping> = other_pings.iter()
+        let ts_end = seg_guide.last().map(|p| p.timestamp_ms).unwrap_or(u64::MAX);
+        let seg_other: Vec<&Ping> = other_pings
+            .iter()
             .filter(|p| p.timestamp_ms >= ts_start && p.timestamp_ms <= ts_end)
             .copied()
             .collect();
@@ -4067,32 +5038,67 @@ fn generate_viewer_sonar_overlays(
         let strip = render_stitched_overlay_strip(
             &seg_port.iter().copied().collect::<Vec<_>>(),
             &seg_star.iter().copied().collect::<Vec<_>>(),
-            seg_w, seg_h, colormap, remove_water_column,
-            alignments, port_ch, star_ch,
-            global_port_norm_v.as_ref(), global_star_norm_v.as_ref(),
+            seg_w,
+            seg_h,
+            colormap,
+            remove_water_column,
+            alignments,
+            port_ch,
+            star_ch,
+            global_port_norm_v.as_ref(),
+            global_star_norm_v.as_ref(),
             parsed,
             discovery,
         );
 
-        // Viewer image sources don't overlap-composite — skip heavy feathering
-        // to avoid visible gaps.  Only fade near-black pixels to transparent.
-        let mut rgba_strip = apply_alpha_feathering(&strip, 0.0, 0.0);
+        segments.push(ViewerSegment {
+            strip,
+            corners: [
+                (el_lon, el_lat),
+                (er_lon, er_lat),
+                (sr_lon, sr_lat),
+                (sl_lon, sl_lat),
+            ],
+            idx: seg_idx,
+        });
+    }
 
-        // MapLibre requires image coordinates in clockwise order (NW, NE, SE, SW),
-        // otherwise WebGL backface-culls the overlay. By flipping vertically,
-        // Image Top = End (North), Image Bottom = Start (South).
+    {
+        let cfg = crate::overlay_align::AlignConfig::default();
+        for i in 1..segments.len() {
+            let (left, right) = segments.split_at_mut(i);
+            crate::overlay_align::align_strip_pair(&left[i - 1].strip, &mut right[0].strip, &cfg);
+        }
+    }
+
+    let mut result = Vec::new();
+    for seg in &segments {
+        let strip = crate::overlay_align::mask_dropout_rows(&seg.strip);
+        let mut rgba_strip = apply_alpha_feathering(&strip, 0.0, 0.0);
         image::imageops::flip_vertical_in_place(&mut rgba_strip);
 
-        let png_name = format!("seg_{:04}.webp", seg_idx);
+        let png_name = format!("seg_{:04}.webp", seg.idx);
         if let Ok(bytes) = encode_webp_rgba(&rgba_strip) {
             let _ = fs::write(sonar_dir.join(&png_name), &bytes);
             result.push(serde_json::json!({
                 "url": format!("sonar/{png_name}"),
                 "coordinates": [
-                    [el_lon, el_lat],
-                    [er_lon, er_lat],
-                    [sr_lon, sr_lat],
-                    [sl_lon, sl_lat],
+                    [seg.corners[0].0, seg.corners[0].1],
+                    [seg.corners[1].0, seg.corners[1].1],
+                    [seg.corners[2].0, seg.corners[2].1],
+                    [seg.corners[3].0, seg.corners[3].1],
+                ]
+            }));
+        } else if let Ok(bytes) = encode_png_rgba(&rgba_strip) {
+            let png_name = format!("seg_{:04}.png", seg.idx);
+            let _ = fs::write(sonar_dir.join(&png_name), &bytes);
+            result.push(serde_json::json!({
+                "url": format!("sonar/{png_name}"),
+                "coordinates": [
+                    [seg.corners[0].0, seg.corners[0].1],
+                    [seg.corners[1].0, seg.corners[1].1],
+                    [seg.corners[2].0, seg.corners[2].1],
+                    [seg.corners[3].0, seg.corners[3].1],
                 ]
             }));
         }
@@ -4131,12 +5137,12 @@ pub fn egn_role_from_label(label: &str, channel_id: u32) -> SpatialRole {
     } else {
         // Fallback from channel ID (mirrors channel_discovery heuristics)
         match channel_id {
-            4  => SpatialRole::Port,        // GT54 port / GT51 port wing
-            5  => SpatialRole::Starboard,   // GT54 star / GT51 star wing
+            4 => SpatialRole::Port,         // GT54 port / GT51 port wing
+            5 => SpatialRole::Starboard,    // GT54 star / GT51 star wing
             10 => SpatialRole::Port,        // GT56 port
             11 => SpatialRole::Starboard,   // GT56 star
             12 | 13 => SpatialRole::Center, // DownVü
-            _  => SpatialRole::Unassigned,
+            _ => SpatialRole::Unassigned,
         }
     }
 }
@@ -4158,12 +5164,3 @@ pub fn apply_egn_to_channel_pings(pings: &[&Ping], role: SpatialRole) -> Vec<Pin
         })
         .collect()
 }
-
-
-
-
-
-
-
-
-

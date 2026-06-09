@@ -104,6 +104,20 @@
         <label class="check-label"><input id="enableVideo" type="checkbox" checked> Video export</label>
         <label class="check-label"><input id="enableMosaic" type="checkbox" checked> Mosaic outputs</label>
         <label class="check-label"><input id="enableCurvelet" type="checkbox" checked> Curvelet denoise</label>
+        <label>
+          <span class="label-text">Video speed</span>
+          <select id="videoSpeedMode">
+            <option value="readable" selected>Readable (~2 pings/s scroll)</option>
+            <option value="survey">Survey speed (match boat)</option>
+          </select>
+        </label>
+      </div>
+
+      <div id="layoutPicker" class="layout-picker hidden">
+        <h4>Sidescan layout — pick before mosaic &amp; video</h4>
+        <p id="layoutPickerHint" class="muted small"></p>
+        <div id="layoutCandidates" class="layout-candidates"></div>
+        <button id="confirmLayoutBtn" class="btn primary" type="button" disabled>Build with selected layout</button>
       </div>
 
       <div id="pipelineProgress" class="progress-panel hidden">

@@ -6,7 +6,11 @@
 use crate::egn;
 use crate::garmin_rsd_parser::Ping;
 use crate::video_enhanced::{
-    filters, statistics::DatasetStatistics, tvg, ColorLUT, SonarProcessingParams,
+    filters,
+    scroll::{build_scroll_timeline, scroll_window, VideoSpeedMode},
+    statistics::DatasetStatistics,
+    tvg,
+    ColorLUT, SonarProcessingParams,
 };
 use std::collections::HashMap;
 
@@ -97,7 +101,14 @@ pub fn apply_processing_pipeline(
     } else {
         single_channel.as_ref().map(|v| v.len()).unwrap_or(0)
     };
-    let total_frames = (total_rows + height - 1).max(1) / height.max(1);
+    let speed_mode = VideoSpeedMode::from_option(&params.video_speed_mode);
+    let timeline = build_scroll_timeline(
+        total_rows,
+        pings,
+        speed_mode,
+        params.video_readable_pings_per_sec,
+        params.fps,
+    );
 
     // ── Blanking-zone detection (GT56 AGC ring-down) ─────────────────────────
     // Detect from the first ≤500 pings of whichever side is available.
@@ -177,20 +188,20 @@ pub fn apply_processing_pipeline(
         (params.noise_floor_db, params.signal_ceiling_db)
     };
 
-    let mut frames = Vec::with_capacity(total_frames);
+    let mut frames = Vec::with_capacity(timeline.end_ping_indices.len());
 
-    for frame_idx in 0..total_frames {
-        let row_start = frame_idx * height;
-        let row_end = (row_start + height).min(total_rows);
+    for &end_ping in &timeline.end_ping_indices {
+        let (data_start, data_end, top_pad) = scroll_window(end_ping, height);
 
         let intermediate = if let (Some(port), Some(star)) = (&port_pings, &star_pings) {
             build_intermediate_frame_stitched(
                 port,
                 star,
-                row_start,
-                row_end,
+                data_start,
+                data_end,
                 side_width,
                 height,
+                top_pad,
                 nadir_skip,
                 &tvg_lut_side,
                 params,
@@ -200,11 +211,13 @@ pub fn apply_processing_pipeline(
             )?
         } else {
             let channel = single_channel.as_ref().unwrap();
-            let frame_pings = &channel[row_start.min(channel.len())..row_end.min(channel.len())];
             build_intermediate_frame_single(
-                frame_pings,
+                channel,
+                data_start,
+                data_end,
                 mode_width,
                 height,
+                top_pad,
                 nadir_skip,
                 &tvg_lut_side,
                 params,
@@ -251,11 +264,14 @@ pub fn apply_processing_pipeline(
     Ok(frames)
 }
 
-/// Build intermediate frame for a single channel (legacy path).
+/// Build intermediate frame for a single channel (scrolling viewport).
 fn build_intermediate_frame_single(
     pings: &[&Ping],
+    data_start: usize,
+    data_end: usize,
     width: usize,
-    height: usize,
+    viewport_height: usize,
+    top_pad: usize,
     nadir_skip: usize,
     tvg_lut: &[f32],
     params: &SonarProcessingParams,
@@ -263,18 +279,22 @@ fn build_intermediate_frame_single(
     ceiling_db: f32,
     blanking: &egn::BlankingZone,
 ) -> anyhow::Result<IntermediateFrame> {
-    let mut intensities = vec![0.0f32; width * height];
+    let mut intensities = vec![0.0f32; width * viewport_height];
 
-    for (row, ping) in pings.iter().enumerate() {
-        // ── Blanking fill (cross-ping soft-fill for hardware dead zone) ──────
+    for (offset, src_row) in (data_start..data_end).enumerate() {
+        if src_row >= pings.len() {
+            continue;
+        }
+        let row = top_pad + offset;
+        let ping = pings[src_row];
         let filled = if blanking.is_active() {
-            let ctx_start = row.saturating_sub(egn::FILL_RADIUS);
-            let ctx_end = (row + egn::FILL_RADIUS + 1).min(pings.len());
+            let ctx_start = src_row.saturating_sub(egn::FILL_RADIUS);
+            let ctx_end = (src_row + egn::FILL_RADIUS + 1).min(pings.len());
             let ctx: Vec<&[u16]> = pings[ctx_start..ctx_end]
                 .iter()
                 .map(|p| p.samples.as_slice())
                 .collect();
-            egn::fill_blanking_ping(row - ctx_start, &ctx, blanking)
+            egn::fill_blanking_ping(src_row - ctx_start, &ctx, blanking)
         } else {
             ping.samples.to_vec()
         };
@@ -304,7 +324,7 @@ fn build_intermediate_frame_single(
     Ok(IntermediateFrame {
         intensities,
         width,
-        height: pings.len(),
+        height: viewport_height,
     })
 }
 
@@ -312,10 +332,11 @@ fn build_intermediate_frame_single(
 fn build_intermediate_frame_stitched(
     port: &[&Ping],
     star: &[&Ping],
-    row_start: usize,
-    row_end: usize,
+    data_start: usize,
+    data_end: usize,
     side_width: usize,
-    height: usize,
+    viewport_height: usize,
+    top_pad: usize,
     nadir_skip: usize,
     tvg_lut: &[f32],
     params: &SonarProcessingParams,
@@ -324,9 +345,10 @@ fn build_intermediate_frame_stitched(
     blanking: &egn::BlankingZone,
 ) -> anyhow::Result<IntermediateFrame> {
     let width = side_width * 2;
-    let mut intensities = vec![0.0f32; width * height];
+    let mut intensities = vec![0.0f32; width * viewport_height];
 
-    for (row_idx, src_row) in (row_start..row_end).enumerate() {
+    for (offset, src_row) in (data_start..data_end).enumerate() {
+        let row_idx = top_pad + offset;
         // ── Helper: fill + nadir-trim + TVG for one side's row ───────────────
         let prepare = |pings: &[&Ping], row: usize| -> Vec<f32> {
             if row >= pings.len() {
@@ -380,7 +402,7 @@ fn build_intermediate_frame_stitched(
     Ok(IntermediateFrame {
         intensities,
         width,
-        height: row_end - row_start,
+        height: viewport_height,
     })
 }
 

@@ -46,9 +46,15 @@ pub struct OutputArtifact {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OutputSummary {
     pub output_dir: String,
     pub artifacts: Vec<OutputArtifact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stitch_layout: Option<crate::channel_discovery::StitchLayoutProposal>,
+    pub layout_confirmation_required: bool,
+    pub resolved_sidescan_pair: (Option<u32>, Option<u32>),
+    pub resolved_alignments: Vec<crate::channel_alignment::ChannelAlignment>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -114,6 +120,14 @@ pub struct PipelineOptions {
     /// Per-channel alignment overrides (flip / invert). If empty, auto-detect is used.
     #[serde(default)]
     pub channel_alignments: Vec<crate::channel_alignment::ChannelAlignment>,
+    /// User-selected layout from `stitch_layout` proposal (`propose_stitch_layouts`).
+    #[serde(default)]
+    pub stitch_layout_id: Option<String>,
+    /// Video scroll speed: `readable` (~2 pings/s) or `survey` (match file ping rate).
+    #[serde(default = "default_video_speed_mode")]
+    pub video_speed_mode: String,
+    #[serde(default = "default_video_readable_pps")]
+    pub video_readable_pings_per_sec: f32,
     /// Highlight extra sonar payload bytes in magenta on waterfall PNGs (debug only).
     #[serde(default)]
     pub show_payload_debug_overlay: bool,
@@ -150,7 +164,13 @@ fn default_video_height() -> u32 {
     1080
 }
 fn default_video_fps() -> u32 {
-    6
+    24
+}
+fn default_video_speed_mode() -> String {
+    "readable".to_string()
+}
+fn default_video_readable_pps() -> f32 {
+    2.0
 }
 fn default_curvelet_threshold() -> f32 {
     0.05
@@ -190,7 +210,10 @@ impl Default for PipelineOptions {
             colormap: "amber".to_string(),
             remove_water_column: false,
             video_height: 1080,
-            video_fps: 6,
+            video_fps: 24,
+            stitch_layout_id: None,
+            video_speed_mode: default_video_speed_mode(),
+            video_readable_pings_per_sec: default_video_readable_pps(),
             overlay_depth: false,
             overlay_temperature: false,
             overlay_gps: false,
@@ -271,18 +294,61 @@ pub fn build_outputs(
             BTreeMap::new()
         };
 
-    // Channel pair scoring is O(n) over all pings; compute once for mosaic,
-    // KMZ, and viewer overlay writers that all need the same result.
-    let sidescan_pair = find_sidescan_pair(parsed);
-
     // Per-file channel discovery drives dynamic stitch orientation (nadir edge + role).
-    let needs_discovery = options.mosaic || options.kmz || options.web_viewer;
+    let needs_discovery = options.mosaic || options.kmz || options.web_viewer || options.video;
     let discovery = if needs_discovery {
         Some(crate::channel_discovery::discover_and_profile(parsed))
     } else {
         None
     };
     let discovery_ref = discovery.as_ref();
+
+    let needs_stitch = options.mosaic || options.kmz || options.web_viewer || options.video;
+    let (stitch_layout, layout_blocked, sidescan_pair, effective_alignments) =
+        if let Some(d) = discovery_ref.filter(|_| needs_stitch) {
+            let proposal = crate::channel_discovery::propose_stitch_layouts(parsed, d);
+            let blocked = proposal.needs_confirmation && options.stitch_layout_id.is_none();
+            let (pair, layout_align) = if blocked {
+                ((None, None), Vec::new())
+            } else {
+                let (pk, sk, align) = crate::channel_discovery::sidescan_pair_from_layout(
+                    &proposal,
+                    options.stitch_layout_id.as_deref(),
+                );
+                ((pk, sk), align)
+            };
+            let mut align = options.channel_alignments.clone();
+            for la in layout_align {
+                if !align.iter().any(|a| a.channel_id == la.channel_id) {
+                    align.push(la);
+                }
+            }
+            (Some(proposal), blocked, pair, align)
+        } else {
+            let pair = discovery_ref.map_or_else(
+                || find_sidescan_pair(parsed),
+                |d| {
+                    if let Some(gt51) = crate::channel_discovery::gt51_single_wing_pair(parsed, d)
+                    {
+                        gt51
+                    } else {
+                        let picked =
+                            crate::channel_discovery::best_sidescan_pair_for_stitch(parsed, d);
+                        if picked.0.is_some() {
+                            picked
+                        } else {
+                            find_sidescan_pair(parsed)
+                        }
+                    }
+                },
+            );
+            (
+                None,
+                false,
+                pair,
+                options.channel_alignments.clone(),
+            )
+        };
 
     if options.waterfall {
         emit_progress(progress, "Rendering Waterfall Image...", 65);
@@ -296,6 +362,28 @@ pub fn build_outputs(
         )?);
     }
 
+    if layout_blocked {
+        if options.kml {
+            emit_progress(progress, "Generating KML...", 85);
+            let path = output_dir.join("track.kml");
+            if let Ok(n) = write_kml(parsed, &path) {
+                artifacts.push(OutputArtifact {
+                    kind: "kml".to_string(),
+                    path: path.display().to_string(),
+                    details: format!("Trackline + {n} depth placemarks (layout pick pending)"),
+                });
+            }
+        }
+        return Ok(OutputSummary {
+            output_dir: output_dir.display().to_string(),
+            artifacts,
+            stitch_layout,
+            layout_confirmation_required: true,
+            resolved_sidescan_pair: sidescan_pair,
+            resolved_alignments: effective_alignments,
+        });
+    }
+
     if options.mosaic {
         emit_progress(progress, "Building Geographic Mosaic...", 75);
         artifacts.extend(write_mosaic_per_channel(
@@ -306,7 +394,7 @@ pub fn build_outputs(
             &options.nadir_mode,
             options.curvelet_denoise,
             options.curvelet_threshold,
-            &options.channel_alignments,
+            &effective_alignments,
             &denoised_cache,
             sidescan_pair,
             discovery_ref,
@@ -457,7 +545,7 @@ pub fn build_outputs(
                 &output_dir,
                 &options.colormap,
                 options.remove_water_column,
-                &options.channel_alignments,
+                &effective_alignments,
                 sidescan_pair,
                 discovery_ref,
             ) {
@@ -503,8 +591,16 @@ pub fn build_outputs(
     }
 
     if options.video {
-        emit_progress(progress, "Rendering enhanced waterfall video...", 92);
-        let video_result = crate::video::run_video_export(parsed, &output_dir);
+        emit_progress(progress, "Rendering scrolling waterfall video...", 92);
+        let mut vid_opts = options.clone();
+        vid_opts.channel_alignments = effective_alignments.clone();
+        let video_result = crate::video::run_video_export_stitch(
+            parsed,
+            &output_dir,
+            &vid_opts,
+            sidescan_pair,
+            discovery_ref,
+        );
         let details = if let Some(ref path) = video_result.output_path {
             format!("{} · {}", video_result.status, path)
         } else {
@@ -532,7 +628,7 @@ pub fn build_outputs(
             &options.colormap,
             options.remove_water_column,
             detections,
-            &options.channel_alignments,
+            &effective_alignments,
             options.noaa_enc,
             sidescan_pair,
             discovery_ref,
@@ -597,6 +693,10 @@ pub fn build_outputs(
     Ok(OutputSummary {
         output_dir: output_dir.display().to_string(),
         artifacts,
+        stitch_layout,
+        layout_confirmation_required: false,
+        resolved_sidescan_pair: sidescan_pair,
+        resolved_alignments: effective_alignments,
     })
 }
 
@@ -948,6 +1048,44 @@ fn detect_nadir_offset(pings: &[&Ping]) -> usize {
     let mut sorted = offsets;
     sorted.sort_unstable();
     sorted[sorted.len() / 2]
+}
+
+/// Per-ping skip before rendering a sidescan row.
+///
+/// `full_strip`: remove the full detected water column (butterfly stitch / KMZ).
+/// Otherwise only trim transducer ring-down (~30 samples max) for single-channel views.
+fn compute_nadir_skip_offsets(
+    pings: &[&Ping],
+    full_strip: bool,
+    profile: Option<&crate::channel_discovery::ChannelProfile>,
+) -> Vec<usize> {
+    if pings.is_empty() {
+        return vec![];
+    }
+    let raw = if full_strip {
+        crate::channel_discovery::per_ping_nadir_skip_with_profile(pings, profile)
+    } else {
+        detect_per_ping_nadir(pings)
+    };
+    if full_strip {
+        let mut smoothed = smooth_nadir_offsets(&raw);
+        if let Some(prof) = profile {
+            if prof.nadir_gap_width >= 10 {
+                let floor = prof.nadir_gap_width;
+                for s in &mut smoothed {
+                    if *s < floor {
+                        *s = floor;
+                    }
+                }
+            }
+        }
+        smoothed
+    } else {
+        let mut sorted = raw.clone();
+        sorted.sort_unstable();
+        let median = sorted[sorted.len() / 2];
+        vec![median.min(30); pings.len()]
+    }
 }
 
 /// Smooth per-ping nadir offsets using a moving-window median to reduce jitter.
@@ -1535,7 +1673,9 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
         .keys()
         .copied()
         .filter(|&ch| {
-            !is_depth_temp(ch) && total_counts.get(&ch).copied().unwrap_or(0) >= min_pings
+            !is_depth_temp(ch)
+                && !crate::channel_discovery::is_known_downscan_channel_id(ch)
+                && total_counts.get(&ch).copied().unwrap_or(0) >= min_pings
         })
         .collect();
 
@@ -1657,6 +1797,14 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
                 && !b_lbl.contains("sidescan");
             let downscan_penalty = if both_downscan { -2.0 } else { 0.0 };
 
+            // 8b. Never butterfly-stitch sidescan with a DownVu/CHIRP channel (e.g. ch6).
+            if crate::channel_discovery::is_known_downscan_channel_id(a)
+                || crate::channel_discovery::is_known_downscan_channel_id(b)
+            {
+                continue;
+            }
+            let cross_downscan_penalty = 0.0;
+
             // 9. Penalty for same-gen same-side (likely ClearVü duplicate, not two arms)
             let same_gen_same_side = !cross_gen
                 && ((a_lbl.contains("port") && b_lbl.contains("port"))
@@ -1672,6 +1820,7 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
                 + label_bonus
                 + det_bonus
                 + downscan_penalty
+                + cross_downscan_penalty
                 + dup_penalty;
 
             eprintln!("  pair ch{}+ch{}: score={:.2} (bal={:.2} ovlp={:.2} struct={:.2}+{:.2} gps={:.1} xgen={:.1} lbl={:.1} det={:.1} ds={:.1} dup={:.1})",
@@ -1732,6 +1881,7 @@ fn should_flip(
     alignments: &[crate::channel_alignment::ChannelAlignment],
     assigned_as_port: bool,
     discovery: Option<&crate::channel_discovery::DiscoveryResult>,
+    nadir_skip: usize,
 ) -> bool {
     crate::channel_discovery::resolve_stitch_flip(
         parsed,
@@ -1739,7 +1889,18 @@ fn should_flip(
         assigned_as_port,
         discovery,
         alignments,
+        nadir_skip,
     )
+}
+
+/// Median per-ping nadir skip used for stitch-orientation (alignment before strip).
+fn median_nadir_skip(offsets: &[usize]) -> usize {
+    if offsets.is_empty() {
+        return 0;
+    }
+    let mut sorted = offsets.to_vec();
+    sorted.sort_unstable();
+    sorted[sorted.len() / 2]
 }
 
 /// Should a channel's samples be inverted (negate brightness)?
@@ -1777,34 +1938,15 @@ fn render_stitched_overlay_strip(
     let half_w = if has_both { seg_w / 2 } else { seg_w };
     let mut strip: RgbImage = ImageBuffer::from_pixel(seg_w, seg_h, Rgb([5u8, 10, 20]));
 
-    // Always detect minimum nadir skip (dead near-field zone) even when
-    // remove_water_column is off.  When enabled, use the full adaptive detection.
+    let port_prof = port_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let star_prof = star_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
     let port_offsets = if !port_pings.is_empty() {
-        let raw = detect_per_ping_nadir(port_pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            // Minimum skip: use median of detected nadirs, clamped to modest value
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            let min_skip = median.min(30); // Don't skip more than 30 samples when WC is off
-            vec![min_skip; port_pings.len()]
-        }
+        compute_nadir_skip_offsets(port_pings, true, port_prof)
     } else {
         vec![]
     };
     let star_offsets = if !star_pings.is_empty() {
-        let raw = detect_per_ping_nadir(star_pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            let min_skip = median.min(30);
-            vec![min_skip; star_pings.len()]
-        }
+        compute_nadir_skip_offsets(star_pings, true, star_prof)
     } else {
         vec![]
     };
@@ -1842,8 +1984,28 @@ fn render_stitched_overlay_strip(
         (0.0, 1.0)
     };
 
-    let port_flip = port_ch.map_or(true, |ch| should_flip(parsed, ch, alignments, true, discovery));
-    let star_flip = star_ch.map_or(false, |ch| should_flip(parsed, ch, alignments, false, discovery));
+    // Alignment/orientation after nadir offsets: strip is applied at render time,
+    // so pass median skip so starboard mirrors when the water column is removed.
+    let port_flip = port_ch.map_or(true, |ch| {
+        should_flip(
+            parsed,
+            ch,
+            alignments,
+            true,
+            discovery,
+            median_nadir_skip(&port_offsets),
+        )
+    });
+    let star_flip = star_ch.map_or(false, |ch| {
+        should_flip(
+            parsed,
+            ch,
+            alignments,
+            false,
+            discovery,
+            median_nadir_skip(&star_offsets),
+        )
+    });
     let port_invert = port_ch.map_or(false, |ch| should_invert(ch, alignments));
     let star_invert = star_ch.map_or(false, |ch| should_invert(ch, alignments));
 
@@ -2176,33 +2338,18 @@ fn render_sidescan_stitched(
     let total_w = single_w * 2;
     let mut img: RgbImage = ImageBuffer::from_pixel(total_w, img_h, Rgb([5u8, 10, 20]));
 
-    // Per-ping adaptive nadir with smoothed offsets for alignment
-    // Always detect minimum nadir skip even when remove_water_column is off
+    // Butterfly mosaic: strip full water column so xi=0 is first seabed return at the
+    // centre seam, not a 30-sample ring-down trim that leaves nadir on the outer edge.
+    let full_nadir_strip = remove_water_column || stitch_nadir;
+    let port_prof = port_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let star_prof = star_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
     let port_offsets = if !port_pings.is_empty() {
-        let raw = detect_per_ping_nadir(port_pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            let min_skip = median.min(30);
-            vec![min_skip; port_pings.len()]
-        }
+        compute_nadir_skip_offsets(port_pings, full_nadir_strip, port_prof)
     } else {
         vec![0; n_pings]
     };
     let star_offsets = if !star_pings.is_empty() {
-        let raw = detect_per_ping_nadir(star_pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            let min_skip = median.min(30);
-            vec![min_skip; star_pings.len()]
-        }
+        compute_nadir_skip_offsets(star_pings, full_nadir_strip, star_prof)
     } else {
         vec![0; n_pings]
     };
@@ -2258,15 +2405,33 @@ fn render_sidescan_stitched(
     };
     let blend_px = (strip_half_w / 3).max(2);
 
-    let port_flip = port_ch.map_or(true, |ch| should_flip(parsed, ch, alignments, true, discovery));
-    let star_flip = star_ch.map_or(false, |ch| should_flip(parsed, ch, alignments, false, discovery));
+    let port_flip = port_ch.map_or(true, |ch| {
+        should_flip(
+            parsed,
+            ch,
+            alignments,
+            true,
+            discovery,
+            median_nadir_skip(&port_offsets),
+        )
+    });
+    let star_flip = star_ch.map_or(false, |ch| {
+        should_flip(
+            parsed,
+            ch,
+            alignments,
+            false,
+            discovery,
+            median_nadir_skip(&star_offsets),
+        )
+    });
 
     for dst_y in 0..img_h {
         // Per-channel y-mapping: each channel scales independently to the output
         // height so the shorter channel stretches to fill rather than repeating
         // its last ping (which caused the vertical smear artifact).
 
-        // Starboard → right half (nadir at left edge of this half)
+        // Starboard → right half; xi=0 (post-nadir) lands on centre seam at x=single_w
         if !star_pings.is_empty() {
             let n = star_pings.len();
             let src_y = (dst_y as usize * n) / img_h as usize;
@@ -2290,7 +2455,7 @@ fn render_sidescan_stitched(
                 img.put_pixel(dst_x, dst_y, apply_colormap(g as f32 / 255.0, colormap));
             }
         }
-        // Port → left half, reversed so the outer edge is at x = 0
+        // Port → left half; mirror so xi=0 (post-nadir) lands on centre seam at x=single_w-1
         if !port_pings.is_empty() {
             let n = port_pings.len();
             let src_y = (dst_y as usize * n) / img_h as usize;
@@ -3082,33 +3247,54 @@ pub fn build_stitched_mosaic_rgb(
     discovery: Option<&crate::channel_discovery::DiscoveryResult>,
 ) -> Option<RgbImage> {
     let channels = pings_by_channel(parsed);
-    let (pk, sk) = sidescan_pair;
-    let (pk, sk) = (pk?, sk?);
+    let pk = sidescan_pair.0?;
+    let sk = sidescan_pair.1;
     let port_pings = channels.get(&pk)?;
-    let star_pings = channels.get(&sk)?;
+    let star_pings = sk
+        .and_then(|s| channels.get(&s))
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
     let p_n = port_pings.len();
     let s_n = star_pings.len();
-    let min_n = p_n.min(s_n);
-    let max_n = p_n.max(s_n).max(1);
-    if min_n < 200 || (min_n as f64 / max_n as f64) < 0.12 {
+    if p_n < 200 {
         return None;
+    }
+    if let Some(_) = sk {
+        let min_n = p_n.min(s_n);
+        let max_n = p_n.max(s_n).max(1);
+        if min_n < 200 || (min_n as f64 / max_n as f64) < 0.12 {
+            return None;
+        }
     }
 
     let port_lbl = channel_label(parsed, pk);
-    let star_lbl = channel_label(parsed, sk);
     let port_role = egn_role_from_label(&port_lbl, pk);
-    let star_role = egn_role_from_label(&star_lbl, sk);
     let port_egn = apply_egn_to_channel_pings(port_pings, port_role);
-    let star_egn = apply_egn_to_channel_pings(star_pings, star_role);
+    let star_egn = sk.map(|sk| {
+        let star_lbl = channel_label(parsed, sk);
+        let star_role = egn_role_from_label(&star_lbl, sk);
+        apply_egn_to_channel_pings(star_pings, star_role)
+    });
+    if sk.is_none() {
+        eprintln!(
+            "[channel-probe] single-wing mosaic ch{pk} — GT51/export layout; downscan nadir fill if present"
+        );
+    }
     let port_refs: Vec<&Ping> = port_egn.iter().collect();
-    let star_refs: Vec<&Ping> = star_egn.iter().collect();
+    let star_refs: Vec<&Ping> = star_egn
+        .as_ref()
+        .map(|v| v.iter().collect())
+        .unwrap_or_default();
 
-    let down_ch = if nadir_mode == "fill" {
+    let down_ch = if nadir_mode == "fill" || sk.is_none() {
         channels
             .keys()
             .copied()
-            .filter(|&ch| ch != pk && ch != sk)
-            .filter(|&ch| channel_label(parsed, ch).contains("downscan"))
+            .filter(|&ch| ch != pk && sk.map_or(true, |s| ch != s))
+            .filter(|&ch| {
+                channel_label(parsed, ch).contains("downscan")
+                    || crate::channel_discovery::is_known_downscan_channel_id(ch)
+            })
             .max_by_key(|&ch| channels.get(&ch).map(|v| v.len()).unwrap_or(0))
     } else {
         None
@@ -3141,7 +3327,7 @@ pub fn build_stitched_mosaic_rgb(
         nadir_mode != "raw",
         alignments,
         Some(pk),
-        Some(sk),
+        sk,
         parsed,
         discovery,
     )
@@ -3216,9 +3402,36 @@ fn write_mosaic_per_channel(
         }
     }
 
-    // Stitched butterfly mosaic: use pre-computed channel pair (coverage + overlap).
+    // Stitched butterfly or single-wing mosaic (GT51 export: ch4 + ch6 downscan).
     let (port_key, star_key) = sidescan_pair;
-    if let (Some(pk), Some(sk)) = (port_key, star_key) {
+    if let (Some(pk), sk_opt) = (port_key, star_key) {
+        if sk_opt.is_none() {
+            if let Some(combined) = build_stitched_mosaic_rgb(
+                parsed,
+                colormap,
+                remove_water_column,
+                if nadir_mode == "raw" { "raw" } else { "fill" },
+                alignments,
+                (Some(pk), None),
+                discovery,
+            ) {
+                let path = output_dir.join("mosaic_combined.png");
+                if combined.save(&path).is_ok() {
+                    arts.push(OutputArtifact {
+                        kind: "mosaic_combined".to_string(),
+                        path: path.display().to_string(),
+                        details: format!(
+                            "Single-wing ch{pk} + downscan nadir fill · {}×{} · {} palette",
+                            combined.width(),
+                            combined.height(),
+                            colormap
+                        ),
+                    });
+                }
+            }
+            return Ok(arts);
+        }
+        let sk = sk_opt.unwrap();
         let p_n = channels.get(&pk).map(|v| v.len()).unwrap_or(0);
         let s_n = channels.get(&sk).map(|v| v.len()).unwrap_or(0);
         let min_n = p_n.min(s_n);
@@ -3814,22 +4027,14 @@ fn write_kmz(
     // ── Global normalization: compute TVG + percentile norms across the ENTIRE
     // track so all segments share the same contrast range.  This eliminates
     // brightness banding between adjacent segments.
-    let compute_offsets = |pings: &[&Ping]| -> Vec<usize> {
-        if pings.is_empty() {
-            return vec![];
-        }
-        let raw = detect_per_ping_nadir(pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            vec![median.min(30); pings.len()]
-        }
-    };
+    let port_prof = port_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let star_prof = star_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let compute_offsets =
+        |pings: &[&Ping], prof: Option<&crate::channel_discovery::ChannelProfile>| {
+            compute_nadir_skip_offsets(pings, true, prof)
+        };
     let global_port_norm = if !port_pings.is_empty() {
-        let offsets = compute_offsets(&port_pings);
+        let offsets = compute_offsets(&port_pings, port_prof);
         let tvg = compute_empirical_tvg(&port_pings, &offsets);
         let (p2, p98) = compute_segment_norm(&port_pings, &offsets, &tvg);
         Some(PrecomputedNorm { tvg, p2, p98 })
@@ -3837,7 +4042,7 @@ fn write_kmz(
         None
     };
     let global_star_norm = if !star_pings.is_empty() {
-        let offsets = compute_offsets(&star_pings);
+        let offsets = compute_offsets(&star_pings, star_prof);
         let tvg = compute_empirical_tvg(&star_pings, &offsets);
         let (p2, p98) = compute_segment_norm(&star_pings, &offsets, &tvg);
         Some(PrecomputedNorm { tvg, p2, p98 })
@@ -4781,23 +4986,14 @@ fn generate_viewer_sonar_overlays(
         &star_pings
     };
 
-    // ── Global normalization for consistent cross-segment brightness ──────────
-    let compute_offsets_v = |pings: &[&Ping]| -> Vec<usize> {
-        if pings.is_empty() {
-            return vec![];
-        }
-        let raw = detect_per_ping_nadir(pings);
-        if remove_water_column {
-            smooth_nadir_offsets(&raw)
-        } else {
-            let mut sorted = raw.clone();
-            sorted.sort_unstable();
-            let median = sorted[sorted.len() / 2];
-            vec![median.min(30); pings.len()]
-        }
-    };
+    let port_prof_v = port_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let star_prof_v = star_ch.and_then(|ch| discovery.and_then(|d| d.profile(ch)));
+    let compute_offsets_v =
+        |pings: &[&Ping], prof: Option<&crate::channel_discovery::ChannelProfile>| {
+            compute_nadir_skip_offsets(pings, true, prof)
+        };
     let global_port_norm_v = if !port_pings.is_empty() {
-        let offsets = compute_offsets_v(&port_pings);
+        let offsets = compute_offsets_v(&port_pings, port_prof_v);
         let tvg = compute_empirical_tvg(&port_pings, &offsets);
         let (p2, p98) = compute_segment_norm(&port_pings, &offsets, &tvg);
         Some(PrecomputedNorm { tvg, p2, p98 })
@@ -4805,7 +5001,7 @@ fn generate_viewer_sonar_overlays(
         None
     };
     let global_star_norm_v = if !star_pings.is_empty() {
-        let offsets = compute_offsets_v(&star_pings);
+        let offsets = compute_offsets_v(&star_pings, star_prof_v);
         let tvg = compute_empirical_tvg(&star_pings, &offsets);
         let (p2, p98) = compute_segment_norm(&star_pings, &offsets, &tvg);
         Some(PrecomputedNorm { tvg, p2, p98 })

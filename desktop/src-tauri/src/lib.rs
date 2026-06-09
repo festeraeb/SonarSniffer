@@ -180,6 +180,9 @@ pub struct PipelineResponse {
     pub channel_discovery: Option<channel_discovery::DiscoveryResult>,
     /// SoundTiles feature-alignment results (if enabled in pipeline options).
     pub soundtiles: Option<SoundTilesResult>,
+    /// Stitch layout candidates when confidence is low (pick before mosaic/video).
+    pub stitch_layout: Option<channel_discovery::StitchLayoutProposal>,
+    pub layout_confirmation_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -556,8 +559,22 @@ pub fn run_pipeline_internal(
     //   pings from the IPC payload to avoid 160+ MB serialization.
     // - In CLI / tests (app.is_none()): keep pings in-memory and skip video generation so we
     //   can inspect decoded fields (depth/temp debugging etc.).
+    let layout_confirmation_required = outputs
+        .as_ref()
+        .map(|o| o.layout_confirmation_required)
+        .unwrap_or(false);
+    let stitch_layout = outputs.as_ref().and_then(|o| o.stitch_layout.clone());
+    let resolved_pair = outputs
+        .as_ref()
+        .map(|o| o.resolved_sidescan_pair)
+        .unwrap_or_else(|| outputs::find_sidescan_pair(&parse));
+    let resolved_alignments = outputs
+        .as_ref()
+        .map(|o| o.resolved_alignments.clone())
+        .unwrap_or_default();
+
     let video_rendering;
-    let video = if options.video && app.is_some() {
+    let video = if options.video && app.is_some() && !layout_confirmation_required {
         let vid_dir: PathBuf = outputs
             .as_ref()
             .map(|o| PathBuf::from(&o.output_dir))
@@ -585,12 +602,15 @@ pub fn run_pipeline_internal(
             enhanced.sort_by_key(|p| p.sequence);
             enhanced
         };
-        let sidescan_pair = outputs::find_sidescan_pair(&parse);
+        let sidescan_pair = resolved_pair;
         let parse_for_video = parse.clone();
         let vid_dir_clone = vid_dir.clone();
         let app_progress = app.clone();
         let app_done = app.clone();
-        let vid_options = options.clone();
+        let mut vid_options = options.clone();
+        if vid_options.channel_alignments.is_empty() {
+            vid_options.channel_alignments = resolved_alignments;
+        }
         std::thread::spawn(move || {
             let on_progress: Box<dyn Fn(u32, u32) + Send> = Box::new(move |frame, total| {
                 if let Some(ref h) = app_progress {
@@ -640,7 +660,9 @@ pub fn run_pipeline_internal(
         None
     };
 
-    let mut status = if let Some(err) = &parse.error_message {
+    let mut status = if layout_confirmation_required {
+        "Select a sidescan layout to continue mosaic and video export".to_string()
+    } else if let Some(err) = &parse.error_message {
         format!("Parsing failed: {err}")
     } else {
         "Pipeline complete".to_string()
@@ -708,6 +730,8 @@ pub fn run_pipeline_internal(
         },
         channel_discovery,
         soundtiles,
+        stitch_layout,
+        layout_confirmation_required,
     }
 }
 
@@ -1060,6 +1084,22 @@ fn run_soundtiles_inline(
 }
 
 #[tauri::command]
+#[tauri::command]
+fn propose_stitch_layout(file_name: &str) -> Result<channel_discovery::StitchLayoutProposal, String> {
+    let path = Path::new(file_name);
+    if !path.exists() {
+        return Err(format!("File not found: {file_name}"));
+    }
+    let detected = format_detector::detect_and_parse(path);
+    let parse = detected.parse;
+    if parse.pings.is_empty() {
+        return Err("No pings in file".to_string());
+    }
+    let discovery = channel_discovery::discover_and_profile(&parse);
+    Ok(channel_discovery::propose_stitch_layouts(&parse, &discovery))
+}
+
+#[tauri::command]
 fn discover_channels(file_name: &str) -> Result<channel_discovery::DiscoveryResult, String> {
     let path = Path::new(file_name);
     let detected = format_detector::detect_and_parse(path);
@@ -1164,6 +1204,7 @@ pub fn run() {
             preview_curvelet,
             get_curvelet_diagnostics,
             discover_channels,
+            propose_stitch_layout,
             render_mosaic,
             serve_viewer
         ])

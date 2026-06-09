@@ -6,7 +6,11 @@
 use crate::egn;
 use crate::garmin_rsd_parser::Ping;
 use crate::video_enhanced::{
-    filters, statistics::DatasetStatistics, tvg, ColorLUT, SonarProcessingParams,
+    filters,
+    scroll::{build_scroll_timeline, scroll_window, VideoSpeedMode},
+    statistics::DatasetStatistics,
+    tvg,
+    ColorLUT, SonarProcessingParams,
 };
 use std::collections::HashMap;
 
@@ -36,8 +40,6 @@ pub fn apply_processing_pipeline(
     params: &SonarProcessingParams,
     stats: &DatasetStatistics,
 ) -> anyhow::Result<Vec<ProcessedFrame>> {
-    use anyhow::Context;
-
     // Group pings by channel for stitching
     let mut by_channel: HashMap<u32, Vec<&Ping>> = HashMap::new();
     for ping in pings {
@@ -47,41 +49,51 @@ pub fn apply_processing_pipeline(
     // Detect best port/starboard pair based on known IDs and total sample mass.
     let (port_pings, star_pings) = select_sidescan_pair(&by_channel);
 
-    let (mode_width, nadir_skip, port_pings, star_pings, single_channel) = if let (Some(port), Some(star)) = (port_pings, star_pings) {
-        // Compute water-column nadir skip if requested (same logic as static mosaic).
-        let skip = if params.remove_water_column {
-            let ps = detect_nadir_video(&port);
-            let ss = detect_nadir_video(&star);
-            ps.min(ss)
+    let (mode_width, nadir_skip, port_pings, star_pings, single_channel) =
+        if let (Some(port), Some(star)) = (port_pings, star_pings) {
+            // Compute water-column nadir skip if requested (same logic as static mosaic).
+            let skip = if params.remove_water_column {
+                let ps = detect_nadir_video(&port);
+                let ss = detect_nadir_video(&star);
+                ps.min(ss)
+            } else {
+                0
+            };
+            let max_samples_side = port
+                .iter()
+                .chain(star.iter())
+                .map(|p| p.samples.len().saturating_sub(skip))
+                .max()
+                .unwrap_or(stats.max_samples)
+                .max(1);
+            (max_samples_side * 2, skip, Some(port), Some(star), None)
         } else {
-            0
-        };
-        let max_samples_side = port
-            .iter()
-            .chain(star.iter())
-            .map(|p| p.samples.len().saturating_sub(skip))
-            .max()
-            .unwrap_or(stats.max_samples)
-            .max(1);
-        (max_samples_side * 2, skip, Some(port), Some(star), None)
-    } else {
-        // Fallback to primary channel only (legacy behavior)
-        let primary_pings: Vec<&Ping> = pings
-            .iter()
-            .filter(|p| p.channel == stats.primary_channel)
-            .collect();
+            // Fallback to primary channel only (legacy behavior)
+            let primary_pings: Vec<&Ping> = pings
+                .iter()
+                .filter(|p| p.channel == stats.primary_channel)
+                .collect();
 
-        if primary_pings.is_empty() {
-            anyhow::bail!("No pings found for primary channel {}", stats.primary_channel);
-        }
+            if primary_pings.is_empty() {
+                anyhow::bail!(
+                    "No pings found for primary channel {}",
+                    stats.primary_channel
+                );
+            }
 
-        let skip = if params.remove_water_column {
-            detect_nadir_video(&primary_pings)
-        } else {
-            0
+            let skip = if params.remove_water_column {
+                detect_nadir_video(&primary_pings)
+            } else {
+                0
+            };
+            (
+                stats.max_samples.saturating_sub(skip),
+                skip,
+                None,
+                None,
+                Some(primary_pings),
+            )
         };
-        (stats.max_samples.saturating_sub(skip), skip, None, None, Some(primary_pings))
-    };
 
     let height = params.video_height as usize;
     let total_rows = if let (Some(port), Some(star)) = (&port_pings, &star_pings) {
@@ -89,7 +101,14 @@ pub fn apply_processing_pipeline(
     } else {
         single_channel.as_ref().map(|v| v.len()).unwrap_or(0)
     };
-    let total_frames = (total_rows + height - 1).max(1) / height.max(1);
+    let speed_mode = VideoSpeedMode::from_option(&params.video_speed_mode);
+    let timeline = build_scroll_timeline(
+        total_rows,
+        pings,
+        speed_mode,
+        params.video_readable_pings_per_sec,
+        params.fps,
+    );
 
     // ── Blanking-zone detection (GT56 AGC ring-down) ─────────────────────────
     // Detect from the first ≤500 pings of whichever side is available.
@@ -116,7 +135,11 @@ pub fn apply_processing_pipeline(
 
     // Precompute TVG LUT (per side when stitching).
     // If a blanking zone was found, delay TVG start past the dead zone.
-    let side_width = if port_pings.is_some() { mode_width / 2 } else { mode_width };
+    let side_width = if port_pings.is_some() {
+        mode_width / 2
+    } else {
+        mode_width
+    };
     let tvg_lut_side = {
         let tvg_start = tvg::blanking_aware_start_sample(&blanking, params.tvg_start_sample);
         if tvg_start != params.tvg_start_sample {
@@ -125,8 +148,17 @@ pub fn apply_processing_pipeline(
                 params.tvg_start_sample, tvg_start,
             );
         }
+
+        // Infer transducer profile from signal characteristics to tune TVG.
+        let entropy_like_detail = (stats.percentile_ceiling - stats.percentile_floor) > 1024.0;
+        let max_sample_value = stats.raw_max.clamp(0.0, u16::MAX as f32) as u16;
+        let inferred_profile =
+            tvg::TransducerProfile::from_signal(entropy_like_detail, max_sample_value);
+
         let mut p = params.clone();
         p.tvg_start_sample = tvg_start;
+        p.tvg_absorption_db_per_m = inferred_profile.absorption_db_per_m();
+        p.tvg_spreading_factor = inferred_profile.spreading_factor();
         tvg::precompute_tvg_lut(side_width, &p)
     };
 
@@ -135,28 +167,41 @@ pub fn apply_processing_pipeline(
 
     // Determine dynamic range using either combined channels or provided stats
     let (floor_db, ceiling_db) = if params.use_adaptive_range {
-            let percentile = compute_percentiles_combined(port_pings.as_deref(), star_pings.as_deref(), single_channel.as_deref(), params);
-        let floor = if percentile.0 > 0.0 { 20.0 * percentile.0.log10() } else { params.noise_floor_db };
-        let ceiling = if percentile.1 > 0.0 { 20.0 * percentile.1.log10() } else { params.signal_ceiling_db };
+        let percentile = compute_percentiles_combined(
+            port_pings.as_deref(),
+            star_pings.as_deref(),
+            single_channel.as_deref(),
+            params,
+        );
+        let floor = if percentile.0 > 0.0 {
+            20.0 * percentile.0.log10()
+        } else {
+            params.noise_floor_db
+        };
+        let ceiling = if percentile.1 > 0.0 {
+            20.0 * percentile.1.log10()
+        } else {
+            params.signal_ceiling_db
+        };
         (floor, ceiling)
     } else {
         (params.noise_floor_db, params.signal_ceiling_db)
     };
 
-    let mut frames = Vec::with_capacity(total_frames);
+    let mut frames = Vec::with_capacity(timeline.end_ping_indices.len());
 
-    for frame_idx in 0..total_frames {
-        let row_start = frame_idx * height;
-        let row_end = (row_start + height).min(total_rows);
+    for &end_ping in &timeline.end_ping_indices {
+        let (data_start, data_end, top_pad) = scroll_window(end_ping, height);
 
         let intermediate = if let (Some(port), Some(star)) = (&port_pings, &star_pings) {
             build_intermediate_frame_stitched(
                 port,
                 star,
-                row_start,
-                row_end,
+                data_start,
+                data_end,
                 side_width,
                 height,
+                top_pad,
                 nadir_skip,
                 &tvg_lut_side,
                 params,
@@ -166,11 +211,13 @@ pub fn apply_processing_pipeline(
             )?
         } else {
             let channel = single_channel.as_ref().unwrap();
-            let frame_pings = &channel[row_start.min(channel.len())..row_end.min(channel.len())];
             build_intermediate_frame_single(
-                frame_pings,
+                channel,
+                data_start,
+                data_end,
                 mode_width,
                 height,
+                top_pad,
                 nadir_skip,
                 &tvg_lut_side,
                 params,
@@ -217,11 +264,14 @@ pub fn apply_processing_pipeline(
     Ok(frames)
 }
 
-/// Build intermediate frame for a single channel (legacy path).
+/// Build intermediate frame for a single channel (scrolling viewport).
 fn build_intermediate_frame_single(
     pings: &[&Ping],
+    data_start: usize,
+    data_end: usize,
     width: usize,
-    height: usize,
+    viewport_height: usize,
+    top_pad: usize,
     nadir_skip: usize,
     tvg_lut: &[f32],
     params: &SonarProcessingParams,
@@ -229,16 +279,22 @@ fn build_intermediate_frame_single(
     ceiling_db: f32,
     blanking: &egn::BlankingZone,
 ) -> anyhow::Result<IntermediateFrame> {
-    let mut intensities = vec![0.0f32; width * height];
+    let mut intensities = vec![0.0f32; width * viewport_height];
 
-    for (row, ping) in pings.iter().enumerate() {
-        // ── Blanking fill (cross-ping soft-fill for hardware dead zone) ──────
+    for (offset, src_row) in (data_start..data_end).enumerate() {
+        if src_row >= pings.len() {
+            continue;
+        }
+        let row = top_pad + offset;
+        let ping = pings[src_row];
         let filled = if blanking.is_active() {
-            let ctx_start = row.saturating_sub(egn::FILL_RADIUS);
-            let ctx_end   = (row + egn::FILL_RADIUS + 1).min(pings.len());
+            let ctx_start = src_row.saturating_sub(egn::FILL_RADIUS);
+            let ctx_end = (src_row + egn::FILL_RADIUS + 1).min(pings.len());
             let ctx: Vec<&[u16]> = pings[ctx_start..ctx_end]
-                .iter().map(|p| p.samples.as_slice()).collect();
-            egn::fill_blanking_ping(row - ctx_start, &ctx, blanking)
+                .iter()
+                .map(|p| p.samples.as_slice())
+                .collect();
+            egn::fill_blanking_ping(src_row - ctx_start, &ctx, blanking)
         } else {
             ping.samples.to_vec()
         };
@@ -248,11 +304,19 @@ fn build_intermediate_frame_single(
         } else {
             filled[start..].to_vec()
         };
-        let corrected = tvg::apply_tvg_lut(&samples, tvg_lut);
+        let corrected = if tvg_lut.len() >= samples.len() {
+            tvg::apply_tvg_lut(&samples, tvg_lut)
+        } else {
+            tvg::apply_tvg_correction(&samples, params)
+        };
         let compressed = compress_row(&corrected, params, floor_db, ceiling_db);
 
         for col in 0..width {
-            let value = if col < compressed.len() { compressed[col] } else { 0.0 };
+            let value = if col < compressed.len() {
+                compressed[col]
+            } else {
+                0.0
+            };
             intensities[row * width + col] = value;
         }
     }
@@ -260,7 +324,7 @@ fn build_intermediate_frame_single(
     Ok(IntermediateFrame {
         intensities,
         width,
-        height: pings.len(),
+        height: viewport_height,
     })
 }
 
@@ -268,10 +332,11 @@ fn build_intermediate_frame_single(
 fn build_intermediate_frame_stitched(
     port: &[&Ping],
     star: &[&Ping],
-    row_start: usize,
-    row_end: usize,
+    data_start: usize,
+    data_end: usize,
     side_width: usize,
-    height: usize,
+    viewport_height: usize,
+    top_pad: usize,
     nadir_skip: usize,
     tvg_lut: &[f32],
     params: &SonarProcessingParams,
@@ -280,17 +345,22 @@ fn build_intermediate_frame_stitched(
     blanking: &egn::BlankingZone,
 ) -> anyhow::Result<IntermediateFrame> {
     let width = side_width * 2;
-    let mut intensities = vec![0.0f32; width * height];
+    let mut intensities = vec![0.0f32; width * viewport_height];
 
-    for (row_idx, src_row) in (row_start..row_end).enumerate() {
+    for (offset, src_row) in (data_start..data_end).enumerate() {
+        let row_idx = top_pad + offset;
         // ── Helper: fill + nadir-trim + TVG for one side's row ───────────────
         let prepare = |pings: &[&Ping], row: usize| -> Vec<f32> {
-            if row >= pings.len() { return vec![]; }
+            if row >= pings.len() {
+                return vec![];
+            }
             let filled = if blanking.is_active() {
                 let ctx_start = row.saturating_sub(egn::FILL_RADIUS);
-                let ctx_end   = (row + egn::FILL_RADIUS + 1).min(pings.len());
+                let ctx_end = (row + egn::FILL_RADIUS + 1).min(pings.len());
                 let ctx: Vec<&[u16]> = pings[ctx_start..ctx_end]
-                    .iter().map(|p| p.samples.as_slice()).collect();
+                    .iter()
+                    .map(|p| p.samples.as_slice())
+                    .collect();
                 egn::fill_blanking_ping(row - ctx_start, &ctx, blanking)
             } else {
                 pings[row].samples.to_vec()
@@ -301,7 +371,11 @@ fn build_intermediate_frame_stitched(
             } else {
                 filled[start..].to_vec()
             };
-            tvg::apply_tvg_lut(&samples, tvg_lut)
+            if tvg_lut.len() >= samples.len() {
+                tvg::apply_tvg_lut(&samples, tvg_lut)
+            } else {
+                tvg::apply_tvg_correction(&samples, params)
+            }
         };
 
         // Port (left half, reversed)
@@ -328,14 +402,14 @@ fn build_intermediate_frame_stitched(
     Ok(IntermediateFrame {
         intensities,
         width,
-        height: row_end - row_start,
+        height: viewport_height,
     })
 }
 
 /// Apply logarithmic compression: 20*log10(value) scaled to [0, 1].
 fn log_compress(values: &[f32], floor_db: f32, ceiling_db: f32) -> Vec<f32> {
     const EPSILON: f32 = 1e-10;
-    
+
     values
         .iter()
         .map(|&v| {
@@ -353,7 +427,7 @@ fn histogram_equalize(data: &[f32], width: usize, height: usize) -> Vec<f32> {
         let bin = (val * 255.0).clamp(0.0, 255.0) as usize;
         hist[bin] += 1;
     }
-    
+
     // Compute CDF
     let total = (width * height) as f32;
     let mut cdf = [0.0f32; 256];
@@ -362,7 +436,7 @@ fn histogram_equalize(data: &[f32], width: usize, height: usize) -> Vec<f32> {
         cumsum += hist[i];
         cdf[i] = cumsum as f32 / total;
     }
-    
+
     // Apply equalization
     data.iter()
         .map(|&val| {
@@ -373,7 +447,12 @@ fn histogram_equalize(data: &[f32], width: usize, height: usize) -> Vec<f32> {
 }
 
 /// Compress a TVG-corrected row either with log compression or linear normalization.
-fn compress_row(values: &[f32], params: &SonarProcessingParams, floor_db: f32, ceiling_db: f32) -> Vec<f32> {
+fn compress_row(
+    values: &[f32],
+    params: &SonarProcessingParams,
+    floor_db: f32,
+    ceiling_db: f32,
+) -> Vec<f32> {
     if params.log_compression {
         log_compress(values, floor_db, ceiling_db)
     } else {
@@ -397,13 +476,19 @@ fn compute_percentiles_combined(
     };
 
     if let Some(port) = port {
-        for p in port { push_ping(p); }
+        for p in port {
+            push_ping(p);
+        }
     }
     if let Some(star) = star {
-        for p in star { push_ping(p); }
+        for p in star {
+            push_ping(p);
+        }
     }
     if let Some(single) = single {
-        for p in single { push_ping(p); }
+        for p in single {
+            push_ping(p);
+        }
     }
 
     if samples.is_empty() {
@@ -419,7 +504,9 @@ fn compute_percentiles_combined(
     (floor, ceiling)
 }
 
-fn select_sidescan_pair<'a>(by_channel: &'a HashMap<u32, Vec<&Ping>>) -> (Option<Vec<&'a Ping>>, Option<Vec<&'a Ping>>) {
+fn select_sidescan_pair<'a>(
+    by_channel: &'a HashMap<u32, Vec<&Ping>>,
+) -> (Option<Vec<&'a Ping>>, Option<Vec<&'a Ping>>) {
     // Priority heuristics based on observed captures:
     // 1) If 3+4 present, treat 3=port, 4=starboard.
     // 2) Else if 4+5 present, treat 4=port, 5=starboard.
@@ -449,7 +536,11 @@ fn select_sidescan_pair<'a>(by_channel: &'a HashMap<u32, Vec<&Ping>>) -> (Option
     if totals.len() >= 2 {
         let (a_id, _) = totals[0];
         let (b_id, _) = totals[1];
-        let (port_id, star_id) = if a_id <= b_id { (a_id, b_id) } else { (b_id, a_id) };
+        let (port_id, star_id) = if a_id <= b_id {
+            (a_id, b_id)
+        } else {
+            (b_id, a_id)
+        };
         return (
             Some(by_channel[&port_id].clone()),
             Some(by_channel[&star_id].clone()),
@@ -500,7 +591,11 @@ fn interpolate_gaps_u16(samples: &[u16], min_gap: usize) -> Vec<u16> {
             continue;
         }
         // find boundary values
-        let prev_val = if start > 0 { out[start - 1] as f32 } else { out[end.min(n - 1)] as f32 };
+        let prev_val = if start > 0 {
+            out[start - 1] as f32
+        } else {
+            out[end.min(n - 1)] as f32
+        };
         let next_val = if end < n { out[end] as f32 } else { prev_val };
         for (k, v) in out[start..end].iter_mut().enumerate() {
             let t = (k as f32 + 1.0) / (gap_len as f32 + 1.0);
@@ -513,7 +608,13 @@ fn interpolate_gaps_u16(samples: &[u16], min_gap: usize) -> Vec<u16> {
 /// Apply CLAHE (Contrast-Limited Adaptive Histogram Equalization).
 ///
 /// Simplified implementation: divide image into tiles, equalize each tile, interpolate.
-fn apply_clahe(data: &[f32], width: usize, height: usize, tile_size: usize, clip_limit: f32) -> Vec<f32> {
+fn apply_clahe(
+    data: &[f32],
+    width: usize,
+    height: usize,
+    tile_size: usize,
+    clip_limit: f32,
+) -> Vec<f32> {
     if tile_size == 0 {
         return data.to_vec();
     }
@@ -580,9 +681,7 @@ fn apply_clahe(data: &[f32], width: usize, height: usize, tile_size: usize, clip
             let dx = gx - tx0 as f32;
             let dy = gy - ty0 as f32;
 
-            let idx = |tx: usize, ty: usize| -> &[f32; 256] {
-                &cdfs[ty * tiles_x + tx]
-            };
+            let idx = |tx: usize, ty: usize| -> &[f32; 256] { &cdfs[ty * tiles_x + tx] };
 
             let val = data[y * width + x];
             let bin = (val * 255.0).clamp(0.0, 255.0) as usize;
@@ -605,7 +704,7 @@ fn apply_clahe(data: &[f32], width: usize, height: usize, tile_size: usize, clip
 /// Apply colormap LUT to normalized intensities.
 fn apply_colormap(intensities: &[f32], lut: &ColorLUT) -> Vec<u8> {
     let mut rgb = Vec::with_capacity(intensities.len() * 3);
-    
+
     for &intensity in intensities {
         let idx = (intensity * 255.0).clamp(0.0, 255.0) as usize;
         let (r, g, b) = lut[idx.min(255)];
@@ -613,36 +712,36 @@ fn apply_colormap(intensities: &[f32], lut: &ColorLUT) -> Vec<u8> {
         rgb.push(g);
         rgb.push(b);
     }
-    
+
     rgb
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_log_compress() {
         let values = vec![1.0, 10.0, 100.0, 1000.0];
         let compressed = log_compress(&values, -60.0, 60.0);
-        
+
         // Should be monotonically increasing
         assert!(compressed[0] < compressed[1]);
         assert!(compressed[1] < compressed[2]);
         assert!(compressed[2] < compressed[3]);
-        
+
         // Should be in [0, 1]
         for &v in &compressed {
             assert!(v >= 0.0 && v <= 1.0);
         }
     }
-    
+
     #[test]
     fn test_histogram_equalize() {
         // Uniform distribution should remain relatively uniform
         let data: Vec<f32> = (0..256).map(|i| i as f32 / 255.0).collect();
         let eq = histogram_equalize(&data, 16, 16);
-        
+
         // Check range
         let min = eq.iter().copied().fold(f32::MAX, f32::min);
         let max = eq.iter().copied().fold(f32::MIN, f32::max);

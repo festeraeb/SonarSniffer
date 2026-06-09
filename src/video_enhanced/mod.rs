@@ -18,8 +18,11 @@ mod colormaps;
 mod filters;
 mod processing;
 mod renderer;
+mod scroll;
 mod statistics;
 pub mod tvg;
+
+pub use scroll::{build_scroll_timeline, scroll_window, VideoSpeedMode};
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -139,8 +142,16 @@ pub struct SonarProcessingParams {
     /// Frame rate for output video.
     pub fps: u32,
 
-    /// Video height in pixels (number of pings per frame). Increase for fuller-frame playback.
+    /// Viewport height in pixels (visible ping rows on screen).
     pub video_height: u32,
+
+    /// `readable` (default, ~2 pings/s) or `survey` (match file ping rate).
+    #[serde(default = "default_video_speed_mode")]
+    pub video_speed_mode: String,
+
+    /// Display rate when `video_speed_mode` is `readable`.
+    #[serde(default = "default_readable_pps")]
+    pub video_readable_pings_per_sec: f32,
 
     /// Prefer hardware encoding (NVENC, QuickSync) if available.
     pub prefer_hardware_encoding: bool,
@@ -151,6 +162,13 @@ pub struct SonarProcessingParams {
     /// Strip the near-field blank water-column region from every ping row.
     /// Uses the same auto-detect nadir approach as the static mosaic images.
     pub remove_water_column: bool,
+}
+
+fn default_video_speed_mode() -> String {
+    "readable".to_string()
+}
+fn default_readable_pps() -> f32 {
+    2.0
 }
 
 impl Default for SonarProcessingParams {
@@ -193,8 +211,10 @@ impl Default for SonarProcessingParams {
             gap_threshold_samples: 10,
 
             // Video encoding
-            fps: 6,
+            fps: 24,
             video_height: 1080,
+            video_speed_mode: default_video_speed_mode(),
+            video_readable_pings_per_sec: default_readable_pps(),
             prefer_hardware_encoding: false,
 
             // Water column
@@ -295,24 +315,42 @@ pub struct ProcessingStats {
     pub clahe_applied: bool,
 }
 
-/// Slice a pre-rendered stitched mosaic into fixed-height video frames.
-pub fn mosaic_to_frames(mosaic: &image::RgbImage, frame_height: u32) -> Vec<ProcessedFrame> {
+/// Scrolling waterfall frames from a stitched mosaic (bottom-fill, then scroll up).
+pub fn mosaic_to_scroll_frames(
+    mosaic: &image::RgbImage,
+    params: &SonarProcessingParams,
+) -> Vec<ProcessedFrame> {
+    use scroll::{build_scroll_timeline, scroll_window, VideoSpeedMode};
+
     let width = mosaic.width();
     let height = mosaic.height();
     if width == 0 || height == 0 {
         return vec![];
     }
-    let fh = frame_height.max(1).min(height);
-    let n_frames = (height + fh - 1) / fh;
-    let mut frames = Vec::with_capacity(n_frames as usize);
-    for fi in 0..n_frames {
-        let y0 = fi * fh;
-        let y1 = (y0 + fh).min(height);
-        let mut pixels = vec![0u8; (width * fh * 3) as usize];
-        for y in y0..y1 {
+    let viewport = params.video_height.max(1).min(height) as usize;
+    let speed = VideoSpeedMode::from_option(&params.video_speed_mode);
+    let timeline = build_scroll_timeline(
+        height as usize,
+        &[],
+        speed,
+        params.video_readable_pings_per_sec,
+        params.fps,
+    );
+
+    let bg = [5u8, 10, 20];
+    let mut frames = Vec::with_capacity(timeline.end_ping_indices.len());
+    for &end_row in &timeline.end_ping_indices {
+        let (data_start, data_end, top_pad) = scroll_window(end_row, viewport);
+        let mut pixels = vec![0u8; width as usize * viewport * 3];
+        for i in 0..pixels.len() {
+            pixels[i] = bg[i % 3];
+        }
+        for dst_y in 0..(data_end - data_start) {
+            let src_y = (data_start + dst_y) as u32;
+            let out_y = top_pad + dst_y;
             for x in 0..width {
-                let px = mosaic.get_pixel(x, y);
-                let off = ((y - y0) * width + x) as usize * 3;
+                let px = mosaic.get_pixel(x, src_y);
+                let off = (out_y * width as usize + x as usize) * 3;
                 pixels[off] = px[0];
                 pixels[off + 1] = px[1];
                 pixels[off + 2] = px[2];
@@ -321,7 +359,7 @@ pub fn mosaic_to_frames(mosaic: &image::RgbImage, frame_height: u32) -> Vec<Proc
         frames.push(ProcessedFrame {
             pixels,
             width,
-            height: fh,
+            height: viewport as u32,
         });
     }
     frames
@@ -331,18 +369,15 @@ pub fn mosaic_to_frames(mosaic: &image::RgbImage, frame_height: u32) -> Vec<Proc
 pub fn render_mosaic_waterfall<F>(
     mosaic: image::RgbImage,
     output_dir: &Path,
-    fps: u32,
-    frame_height: u32,
+    params: SonarProcessingParams,
     on_progress: F,
 ) -> anyhow::Result<EnhancedVideoResult>
 where
     F: Fn(u32, u32) + Send + 'static,
 {
     use anyhow::Context;
-    let mut params = SonarProcessingParams::high_quality();
-    params.fps = fps.max(1);
-    params.video_height = frame_height.max(1);
-    let frames = mosaic_to_frames(&mosaic, params.video_height);
+    let params = params;
+    let frames = mosaic_to_scroll_frames(&mosaic, &params);
     let stats = DatasetStatistics {
         total_pings: frames.len(),
         primary_channel: 0,

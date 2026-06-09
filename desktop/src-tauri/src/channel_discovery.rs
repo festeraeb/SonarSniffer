@@ -90,12 +90,12 @@ pub enum SpatialRole {
 impl std::fmt::Display for SpatialRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Port                => write!(f, "Port"),
-            Self::Starboard          => write!(f, "Starboard"),
-            Self::Center             => write!(f, "Center"),
-            Self::SingleSidePort     => write!(f, "SingleSide-Port (GT51)"),
+            Self::Port => write!(f, "Port"),
+            Self::Starboard => write!(f, "Starboard"),
+            Self::Center => write!(f, "Center"),
+            Self::SingleSidePort => write!(f, "SingleSide-Port (GT51)"),
             Self::SingleSideStarboard => write!(f, "SingleSide-Starboard (GT51)"),
-            Self::Unassigned         => write!(f, "Unassigned"),
+            Self::Unassigned => write!(f, "Unassigned"),
         }
     }
 }
@@ -120,9 +120,9 @@ pub enum NadirEdge {
 impl std::fmt::Display for NadirEdge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Left    => write!(f, "Left"),
-            Self::Center  => write!(f, "Centre"),
-            Self::Right   => write!(f, "Right"),
+            Self::Left => write!(f, "Left"),
+            Self::Center => write!(f, "Centre"),
+            Self::Right => write!(f, "Right"),
             Self::Unknown => write!(f, "Unknown"),
         }
     }
@@ -242,25 +242,26 @@ impl std::fmt::Display for FirmwareLayout {
 }
 
 /// Detect firmware layout from channel presence and ping counts.
-/// 
+///
 /// GT56 UHD2+ has three firmware-dependent channel layouts:
 /// - 8-series: ch8/9=port/star, ch10=chirp, ch11=depth
 /// - 10-series: ch10/11=port/star, ch12=chirp, ch13=depth (25MAR25+ firmware)
 /// - 14-series: ch14/15=port/star, ch16=chirp, ch17=depth
-/// 
+///
 /// Critical: ch10/ch11 are AMBIGUOUS — chirp in 8-series, sidescan in 10-series.
 pub fn detect_firmware_layout(profiles: &[ChannelProfile]) -> FirmwareLayout {
-    let channel_ids: std::collections::BTreeSet<u32> = 
+    let channel_ids: std::collections::BTreeSet<u32> =
         profiles.iter().map(|p| p.channel_id).collect();
-    
+
     // Helper: get ping count for a channel
     let ping_count = |ch: u32| -> usize {
-        profiles.iter()
+        profiles
+            .iter()
             .find(|p| p.channel_id == ch)
             .map(|p| p.ping_count)
             .unwrap_or(0)
     };
-    
+
     // 14-series: ch14+ch15 both present with similar counts
     if channel_ids.contains(&14) && channel_ids.contains(&15) {
         let ch14 = ping_count(14);
@@ -269,7 +270,7 @@ pub fn detect_firmware_layout(profiles: &[ChannelProfile]) -> FirmwareLayout {
             return FirmwareLayout::Series14;
         }
     }
-    
+
     // 10-series: ch10+ch11 BOTH present with similar ping counts (sidescan pair)
     if channel_ids.contains(&10) && channel_ids.contains(&11) {
         let ch10 = ping_count(10);
@@ -282,7 +283,7 @@ pub fn detect_firmware_layout(profiles: &[ChannelProfile]) -> FirmwareLayout {
             }
         }
     }
-    
+
     // 8-series: ch8+ch9 present, OR ch10 present without ch11 (ch10=chirp)
     if channel_ids.contains(&8) && channel_ids.contains(&9) {
         let ch8 = ping_count(8);
@@ -291,7 +292,7 @@ pub fn detect_firmware_layout(profiles: &[ChannelProfile]) -> FirmwareLayout {
             return FirmwareLayout::Series8;
         }
     }
-    
+
     // 8-series with only ch10 (chirp downscan, no sidescan)
     if channel_ids.contains(&10) && !channel_ids.contains(&11) {
         let ch10 = ping_count(10);
@@ -299,15 +300,20 @@ pub fn detect_firmware_layout(profiles: &[ChannelProfile]) -> FirmwareLayout {
             return FirmwareLayout::Series8;
         }
     }
-    
+
     // UHD classic: ch4+ch5 present
     if channel_ids.contains(&4) && channel_ids.contains(&5) {
         return FirmwareLayout::UhdClassic;
     }
-    
+
+    // GT51 / export capture: single SideVü wing (ch4) + DownVu (ch6), no ch5.
+    // Common when third-party tools remap channels after Garmin patent restrictions.
+    if channel_ids.contains(&4) && channel_ids.contains(&6) && !channel_ids.contains(&5) {
+        return FirmwareLayout::Unknown; // handled as single-wing + downscan fill at stitch time
+    }
+
     FirmwareLayout::Unknown
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §3  MAIN ENTRY POINT
@@ -348,7 +354,15 @@ pub fn discover_and_profile(parsed: &ParseResult) -> DiscoveryResult {
     // This is critical for ch10/ch11 disambiguation (chirp in 8-series, sidescan in 10-series).
     let firmware_layout = detect_firmware_layout(&profiles);
     log.push(format!("Firmware layout detected: {}", firmware_layout));
-    
+
+    let ch_set: std::collections::BTreeSet<u32> = profiles.iter().map(|p| p.channel_id).collect();
+    if ch_set.contains(&4) && ch_set.contains(&6) && !ch_set.contains(&5) {
+        log.push(
+            "Export layout: ch4+ch6 without ch5 — GT51/single-wing + DownVu (not ch4+ch6 butterfly)"
+                .to_string(),
+        );
+    }
+
     // Use firmware layout to refine channel classification
     if firmware_layout == FirmwareLayout::Series10 {
         // In 10-series, ch10=port, ch11=starboard, ch12=chirp
@@ -393,7 +407,7 @@ pub fn discover_and_profile(parsed: &ParseResult) -> DiscoveryResult {
     // Nadir at Right edge → SingleSideStarboard.
     // "Do NOT split it; use the whole array as one wing of the boat."
     //
-    // GT51 signature: Single SideVü channel with channel ID ≤ 3 (classic) or 
+    // GT51 signature: Single SideVü channel with channel ID ≤ 3 (classic) or
     // channel ID 4/6 (ClearVü mode). No paired sidescan present.
     for p in profiles.iter_mut() {
         if p.archetype == SignalArchetype::SideVu && p.spatial_role == SpatialRole::Unassigned {
@@ -401,10 +415,10 @@ pub fn discover_and_profile(parsed: &ParseResult) -> DiscoveryResult {
             let is_gt51_classic = p.channel_id <= 3;
             let is_gt51_clearvu = p.channel_id == 4 || p.channel_id == 6;
             let is_single_wing = is_gt51_classic || is_gt51_clearvu;
-            
+
             if is_single_wing {
                 p.spatial_role = match p.nadir_edge {
-                    NadirEdge::Left  => SpatialRole::SingleSidePort,
+                    NadirEdge::Left => SpatialRole::SingleSidePort,
                     NadirEdge::Right => SpatialRole::SingleSideStarboard,
                     _ => {
                         // Default to port for GT51 (most common configuration)
@@ -415,16 +429,20 @@ pub fn discover_and_profile(parsed: &ParseResult) -> DiscoveryResult {
                 log.push(format!(
                     "ch{}: GT51 {} + nadir={:?} → {:?} (single-wing asymmetric)",
                     p.channel_id,
-                    if is_gt51_classic { "classic" } else { "ClearVü" },
+                    if is_gt51_classic {
+                        "classic"
+                    } else {
+                        "ClearVü"
+                    },
                     p.nadir_edge,
                     p.spatial_role
                 ));
             } else {
                 // Non-GT51 unpaired SideVü - still assign based on nadir edge
                 p.spatial_role = match p.nadir_edge {
-                    NadirEdge::Left  => SpatialRole::SingleSidePort,
+                    NadirEdge::Left => SpatialRole::SingleSidePort,
                     NadirEdge::Right => SpatialRole::SingleSideStarboard,
-                    _                => SpatialRole::Unassigned,
+                    _ => SpatialRole::Unassigned,
                 };
                 if p.spatial_role != SpatialRole::Unassigned {
                     log.push(format!(
@@ -454,7 +472,9 @@ pub fn discover_and_profile(parsed: &ParseResult) -> DiscoveryResult {
     // ── Step 2c: Temporal Alignment ─────────────────────────────────────────
     let active_channels: BTreeSet<u32> = profiles
         .iter()
-        .filter(|p| p.archetype != SignalArchetype::DepthTemp && p.archetype != SignalArchetype::Noise)
+        .filter(|p| {
+            p.archetype != SignalArchetype::DepthTemp && p.archetype != SignalArchetype::Noise
+        })
         .map(|p| p.channel_id)
         .collect();
     let scanlines = build_composite_scanlines(parsed, &active_channels, &mut log);
@@ -539,7 +559,10 @@ fn profile_channel(
         .iter()
         .filter(|&&i| {
             let p = &parsed.pings[i];
-            p.latitude != 0.0 && p.longitude != 0.0 && p.latitude.is_finite() && p.longitude.is_finite()
+            p.latitude != 0.0
+                && p.longitude != 0.0
+                && p.latitude.is_finite()
+                && p.longitude.is_finite()
         })
         .count();
 
@@ -580,10 +603,7 @@ fn profile_channel(
 
     // Select profiling window: evenly spaced across the file for robustness
     let window_indices = select_profile_window(&indices, PROFILE_WINDOW);
-    let window_pings: Vec<&Ping> = window_indices
-        .iter()
-        .map(|&i| &parsed.pings[i])
-        .collect();
+    let window_pings: Vec<&Ping> = window_indices.iter().map(|&i| &parsed.pings[i]).collect();
 
     // ── Compute metrics ─────────────────────────────────────────────────────
 
@@ -673,14 +693,23 @@ fn profile_channel(
     let median_beam_angle = compute_median_beam_angle(&window_pings);
 
     // ── Archetype Classification ────────────────────────────────────────────
-    let (archetype, confidence, reason) =
-        classify_archetype(median_gap, median_sample_count, &spike_metrics, mean_entropy, ch_id, median_beam_angle);
+    let (archetype, confidence, reason) = classify_archetype(
+        median_gap,
+        median_sample_count,
+        &spike_metrics,
+        mean_entropy,
+        ch_id,
+        median_beam_angle,
+    );
 
     // ── Sliding-window nadir edge + noise floor ─────────────────────────────
     // Three windows: A (0–15%), B (45–55%), C (85–100%).
     // The quietest window identifies whether this is a:
     //   GT51 single-wing (A or C quiet) vs UHD paired (B quiet after flip).
-    let (nadir_edge, noise_floor) = classify_nadir_edge_sliding(&window_pings);
+    let (mut nadir_edge, noise_floor) = classify_nadir_edge_sliding(&window_pings);
+    if nadir_edge == NadirEdge::Unknown {
+        nadir_edge = infer_nadir_edge_from_gaps(&window_pings);
+    }
 
     // ── Frequency Tier ──────────────────────────────────────────────────────
     let frequency_tier = if mean_entropy > ENTROPY_DETAIL_THRESHOLD {
@@ -693,8 +722,14 @@ fn profile_channel(
 
     log.push(format!(
         "ch{}: {} (conf={:.2}) | gap={} | entropy={:.2} | samples={} | ratio={:.2} | {}",
-        ch_id, archetype, confidence, median_gap, mean_entropy, median_sample_count,
-        sample_byte_ratio, reason,
+        ch_id,
+        archetype,
+        confidence,
+        median_gap,
+        mean_entropy,
+        median_sample_count,
+        sample_byte_ratio,
+        reason,
     ));
 
     ChannelProfile {
@@ -738,12 +773,51 @@ fn select_profile_window(all_indices: &[usize], window_size: usize) -> Vec<usize
 // §6  NADIR GAP MEASUREMENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Measure the "nadir gap" — the number of low-intensity samples at the start
-/// of the array before the first sustained high-intensity run.
-///
-/// SideVü channels have a wide nadir gap (water column beneath the boat).
-/// DownVü/ClearVü have a narrow or zero gap (direct bottom return).
-fn measure_nadir_gaps(pings: &[&Ping]) -> Vec<usize> {
+/// Known DownVu / CHIRP channel IDs — must not be used as a butterfly wing.
+pub fn is_known_downscan_channel_id(ch_id: u32) -> bool {
+    matches!(ch_id, 2 | 6 | 10 | 12 | 16 | 18 | 20 | 993 | 1487)
+}
+
+/// Eligible for port/star butterfly stitch (excludes DownVu/CHIRP channel IDs).
+pub fn is_butterfly_wing_profile(p: &ChannelProfile) -> bool {
+    p.archetype == SignalArchetype::SideVu
+        && p.ping_count >= MIN_PINGS_FOR_CLASSIFY
+        && !is_known_downscan_channel_id(p.channel_id)
+}
+
+/// GT51 / Y-cable export: one SideVü wing (ch4) + DownVu (ch6), no paired ch5.
+pub fn gt51_single_wing_pair(
+    parsed: &ParseResult,
+    discovery: &DiscoveryResult,
+) -> Option<(Option<u32>, Option<u32>)> {
+    let ch_ids: std::collections::BTreeSet<u32> =
+        parsed.pings.iter().map(|p| p.channel).collect();
+    if !(ch_ids.contains(&4) && ch_ids.contains(&6) && !ch_ids.contains(&5)) {
+        return None;
+    }
+    let wing = discovery
+        .profiles
+        .iter()
+        .filter(|p| is_butterfly_wing_profile(p))
+        .max_by_key(|p| p.ping_count)
+        .map(|p| p.channel_id)?;
+    eprintln!(
+        "[channel-probe] GT51 export layout: single-wing ch{wing} + downscan nadir fill"
+    );
+    Some((Some(wing), None))
+}
+
+/// Per-ping water-column width (samples to skip before first seabed return).
+pub fn per_ping_nadir_skip(pings: &[&Ping]) -> Vec<usize> {
+    per_ping_nadir_skip_with_profile(pings, None)
+}
+
+/// Per-ping nadir skip, optionally bounded/filled from discovery profile gap.
+pub fn per_ping_nadir_skip_with_profile(
+    pings: &[&Ping],
+    profile: Option<&ChannelProfile>,
+) -> Vec<usize> {
+    let prof_gap = profile.map(|p| p.nadir_gap_width).filter(|&g| g >= 10);
     pings
         .iter()
         .map(|p| {
@@ -751,9 +825,26 @@ fn measure_nadir_gaps(pings: &[&Ping]) -> Vec<usize> {
             if n < MIN_SAMPLES_SONAR {
                 return 0;
             }
-            measure_single_nadir_gap(&p.samples)
+            let mut gap = measure_single_nadir_gap(&p.samples);
+            if gap == 0 {
+                if let Some(pg) = prof_gap {
+                    gap = pg;
+                }
+            }
+            let max_swath = (n * 18 / 100).max(40);
+            if let Some(pg) = prof_gap {
+                let cap = (pg * 135 / 100) + 15;
+                gap = gap.min(cap).min(max_swath);
+            } else {
+                gap = gap.min(max_swath);
+            }
+            gap
         })
         .collect()
+}
+
+fn measure_nadir_gaps(pings: &[&Ping]) -> Vec<usize> {
+    per_ping_nadir_skip(pings)
 }
 
 /// Core nadir gap measurement for a single sample array.
@@ -812,28 +903,35 @@ fn classify_nadir_edge_sliding(pings: &[&Ping]) -> (NadirEdge, f32) {
     for p in pings {
         let s = &p.samples;
         let n = s.len();
-        if n < 32 { continue; }
+        if n < 32 {
+            continue;
+        }
 
         // Per-ping noise floor: 5th percentile
         let mut sorted: Vec<u16> = s.to_vec();
         sorted.sort_unstable();
-        let p5  = sorted[(n * 5  / 100).min(n - 1)] as f32;
-        let p90 = sorted[(n * 90 / 100).min(n - 1)] as f32;
+        let p5 = sorted[(n * 5 / 100).min(n - 1)] as f32;
+        let _p90 = sorted[(n * 90 / 100).min(n - 1)] as f32;
         noise_vals.push(p5);
 
         // Window means
-        let a_end   = (n as f32 * 0.15) as usize;
+        let a_end = (n as f32 * 0.15) as usize;
         let b_start = (n as f32 * 0.45) as usize;
-        let b_end   = (n as f32 * 0.55) as usize;
+        let b_end = (n as f32 * 0.55) as usize;
         let c_start = (n as f32 * 0.85) as usize;
 
         let mean = |slice: &[u16]| {
-            if slice.is_empty() { 0.0f32 }
-            else { slice.iter().map(|&v| v as f32).sum::<f32>() / slice.len() as f32 }
+            if slice.is_empty() {
+                0.0f32
+            } else {
+                slice.iter().map(|&v| v as f32).sum::<f32>() / slice.len() as f32
+            }
         };
 
         a_means.push(mean(&s[..a_end]));
-        if b_end > b_start { b_means.push(mean(&s[b_start..b_end])); }
+        if b_end > b_start {
+            b_means.push(mean(&s[b_start..b_end]));
+        }
         c_means.push(mean(&s[c_start..]));
     }
 
@@ -842,13 +940,15 @@ fn classify_nadir_edge_sliding(pings: &[&Ping]) -> (NadirEdge, f32) {
     }
 
     let median = |v: &mut Vec<f32>| -> f32 {
-        if v.is_empty() { return 0.0; }
+        if v.is_empty() {
+            return 0.0;
+        }
         v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         v[v.len() / 2]
     };
 
     let noise_floor = median(&mut noise_vals);
-    let threshold   = noise_floor * 1.2;
+    let threshold = noise_floor * 1.2;
     let mean_a = median(&mut a_means);
     let mean_b = median(&mut b_means);
     let mean_c = median(&mut c_means);
@@ -867,10 +967,72 @@ fn classify_nadir_edge_sliding(pings: &[&Ping]) -> (NadirEdge, f32) {
         // Both quiet: left wins (post-flip-correction convention)
         NadirEdge::Left
     } else {
-        NadirEdge::Unknown
+        // Absolute threshold failed (common on UHD after normalization) — use
+        // relative window comparison, then gap-from-both-ends inference.
+        classify_nadir_edge_relative(mean_a, mean_b, mean_c)
+            .unwrap_or_else(|| infer_nadir_edge_from_gaps(pings))
     };
 
     (edge, noise_floor)
+}
+
+/// When absolute quiet thresholds fail, pick the darkest window relatively.
+fn classify_nadir_edge_relative(mean_a: f32, mean_b: f32, mean_c: f32) -> Option<NadirEdge> {
+    let min = mean_a.min(mean_b).min(mean_c);
+    if min <= 0.0 {
+        return None;
+    }
+    if mean_a <= min * 1.12 && mean_a < mean_c * 0.92 {
+        return Some(NadirEdge::Left);
+    }
+    if mean_c <= min * 1.12 && mean_c < mean_a * 0.92 {
+        return Some(NadirEdge::Right);
+    }
+    if mean_b <= mean_a.min(mean_c) * 1.12 {
+        return Some(NadirEdge::Center);
+    }
+    None
+}
+
+/// Infer nadir edge from sustained low-intensity runs at sample start vs end.
+fn measure_single_nadir_gap_from_end(samples: &[u16]) -> usize {
+    measure_single_nadir_gap(&samples.iter().copied().rev().collect::<Vec<_>>())
+}
+
+/// Gap-based nadir edge: compare median water-column width at array start vs end.
+fn infer_nadir_edge_from_gaps(pings: &[&Ping]) -> NadirEdge {
+    let mut left_gaps = Vec::new();
+    let mut right_gaps = Vec::new();
+    for p in pings {
+        let n = p.samples.len();
+        if n < MIN_SAMPLES_SONAR {
+            continue;
+        }
+        left_gaps.push(measure_single_nadir_gap(&p.samples) as f32);
+        right_gaps.push(measure_single_nadir_gap_from_end(&p.samples) as f32);
+    }
+    if left_gaps.is_empty() {
+        return NadirEdge::Unknown;
+    }
+    let median = |v: &mut Vec<f32>| -> f32 {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        v[v.len() / 2]
+    };
+    let l = median(&mut left_gaps);
+    let r = median(&mut right_gaps);
+    if l > 25.0 && l > r * 1.4 {
+        NadirEdge::Left
+    } else if r > 25.0 && r > l * 1.4 {
+        NadirEdge::Right
+    } else if l > 20.0 && r > 20.0 {
+        NadirEdge::Center
+    } else if l > r + 8.0 {
+        NadirEdge::Left
+    } else if r > l + 8.0 {
+        NadirEdge::Right
+    } else {
+        NadirEdge::Unknown
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -884,17 +1046,17 @@ fn compute_median_beam_angle(pings: &[&Ping]) -> f32 {
     if pings.is_empty() {
         return 0.0;
     }
-    
+
     let mut angles: Vec<f32> = pings
         .iter()
         .map(|p| p.beam_angle_deg)
-        .filter(|&a| a > 0.0 && a < 90.0)  // Filter invalid angles
+        .filter(|&a| a > 0.0 && a < 90.0) // Filter invalid angles
         .collect();
-    
+
     if angles.is_empty() {
         return 0.0;
     }
-    
+
     angles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     angles[angles.len() / 2]
 }
@@ -952,8 +1114,14 @@ fn measure_bottom_spikes(pings: &[&Ping]) -> SpikeMetrics {
         // Energy in first vs last quarter
         let q1_end = n / 4;
         let q4_start = n * 3 / 4;
-        let e_front: f64 = p.samples[..q1_end].iter().map(|&s| s as f64 * s as f64).sum();
-        let e_back: f64 = p.samples[q4_start..].iter().map(|&s| s as f64 * s as f64).sum();
+        let e_front: f64 = p.samples[..q1_end]
+            .iter()
+            .map(|&s| s as f64 * s as f64)
+            .sum();
+        let e_back: f64 = p.samples[q4_start..]
+            .iter()
+            .map(|&s| s as f64 * s as f64)
+            .sum();
         let ratio = if e_back > 0.0 {
             (e_front / e_back) as f32
         } else if e_front > 0.0 {
@@ -1048,7 +1216,7 @@ fn classify_archetype(
     spike: &SpikeMetrics,
     _mean_entropy: f32,
     ch_id: u32,
-    median_beam_angle: f32,
+    _median_beam_angle: f32,
 ) -> (SignalArchetype, f32, String) {
     // Score accumulation for each archetype
     let mut side_score: f32 = 0.0;
@@ -1063,12 +1231,12 @@ fn classify_archetype(
         2 | 6 | 10 | 12 | 16 | 18 | 20 => {
             // Classic/Gen1 downscan, UHD downscan, UHD2 downscan (8-series),
             // UHD2 downscan (10-series), UHD2 downscan (14-series), ClearVü HF, ClearVü
-            down_score += 5.0;  // ↑ Increased from 3.0 to override nadir gap false positives
+            down_score += 5.0; // ↑ Increased from 3.0 to override nadir gap false positives
             reasons.push(format!("ch{}=known_downscan_id (strong prior)", ch_id));
         }
         993 | 1487 => {
             // Legacy/exotic downscan channels
-            down_score += 3.5;  // ↑ Increased from 2.5
+            down_score += 3.5; // ↑ Increased from 2.5
             reasons.push(format!("ch{}=legacy_downscan", ch_id));
         }
         7 | 11 | 13 | 17 => {
@@ -1085,10 +1253,10 @@ fn classify_archetype(
     // NOTE: Reduced weight to prevent overriding channel ID prior for known chirp channels
     // like ch12 in 10-series layout which can have wide nadir gap but is still downscan.
     if median_gap >= 20 {
-        side_score += 2.0;  // ↓ Reduced from 3.0
+        side_score += 2.0; // ↓ Reduced from 3.0
         reasons.push(format!("nadir_gap={}≥20→SideVü", median_gap));
     } else if median_gap >= 10 {
-        side_score += 1.0;  // ↓ Reduced from 1.5
+        side_score += 1.0; // ↓ Reduced from 1.5
         reasons.push(format!("nadir_gap={}≥10→SideVü(weak)", median_gap));
     } else if median_gap < 5 {
         down_score += 2.0;
@@ -1107,7 +1275,10 @@ fn classify_archetype(
         reasons.push(format!("samples={}≥800→long_swath", median_sample_count));
     } else if median_sample_count >= 400 {
         side_score += 1.0;
-        reasons.push(format!("samples={}≥400→moderate_swath", median_sample_count));
+        reasons.push(format!(
+            "samples={}≥400→moderate_swath",
+            median_sample_count
+        ));
     } else if median_sample_count < 200 && median_sample_count > 0 {
         down_score += 1.0;
         reasons.push(format!("samples={}<200→narrow_beam", median_sample_count));
@@ -1136,6 +1307,22 @@ fn classify_archetype(
         ));
     }
 
+    // ── Signal 4: Median peak position ────────────────────────────────────
+    // Down-looking channels tend to have an earlier median peak location.
+    if spike.median_peak_position < 0.35 {
+        down_score += 1.0;
+        reasons.push(format!(
+            "median_peak_pos={:.2}<0.35→DownVü",
+            spike.median_peak_position
+        ));
+    } else if spike.median_peak_position > 0.60 {
+        side_score += 0.8;
+        reasons.push(format!(
+            "median_peak_pos={:.2}>0.60→SideVü",
+            spike.median_peak_position
+        ));
+    }
+
     // ── Signal 4: Energy Distribution ───────────────────────────────────────
     // DownVü: energy concentrated in front (high front/back ratio)
     // SideVü: energy more evenly distributed or back-heavy (far range)
@@ -1157,18 +1344,10 @@ fn classify_archetype(
     let total = (side_score + down_score).max(0.01);
     if side_score > down_score {
         let conf = side_score / total;
-        (
-            SignalArchetype::SideVu,
-            conf,
-            reasons.join("; "),
-        )
+        (SignalArchetype::SideVu, conf, reasons.join("; "))
     } else {
         let conf = down_score / total;
-        (
-            SignalArchetype::DownVuClearVu,
-            conf,
-            reasons.join("; "),
-        )
+        (SignalArchetype::DownVuClearVu, conf, reasons.join("; "))
     }
 }
 
@@ -1194,7 +1373,7 @@ fn correlate_port_starboard(
     // Collect all SideVü candidates
     let candidates: Vec<&ChannelProfile> = profiles
         .iter()
-        .filter(|p| p.archetype == SignalArchetype::SideVu && p.ping_count >= MIN_PINGS_FOR_CLASSIFY)
+        .filter(|p| is_butterfly_wing_profile(p))
         .collect();
 
     if candidates.len() < 2 {
@@ -1297,13 +1476,7 @@ fn correlate_port_starboard(
         }
 
         // Assign port/starboard using heading-based orientation
-        let (port, star) = assign_port_starboard(
-            *a,
-            *b,
-            pings_by_ch,
-            parsed,
-            log,
-        );
+        let (port, star) = assign_port_starboard(*a, *b, pings_by_ch, parsed, log);
 
         log.push(format!(
             "  PAIRED ch{}=Port + ch{}=Starboard (score={:.2})",
@@ -1655,13 +1828,25 @@ impl DiscoveryResult {
         let mut parts = Vec::new();
 
         for (port, star) in &self.sidescan_pairs {
-            let p_tier = self.profile(*port).map(|p| p.frequency_tier).unwrap_or(FrequencyTier::Unknown);
-            let s_tier = self.profile(*star).map(|p| p.frequency_tier).unwrap_or(FrequencyTier::Unknown);
-            parts.push(format!("SideVü pair: ch{}(P/{}) + ch{}(S/{})", port, p_tier, star, s_tier));
+            let p_tier = self
+                .profile(*port)
+                .map(|p| p.frequency_tier)
+                .unwrap_or(FrequencyTier::Unknown);
+            let s_tier = self
+                .profile(*star)
+                .map(|p| p.frequency_tier)
+                .unwrap_or(FrequencyTier::Unknown);
+            parts.push(format!(
+                "SideVü pair: ch{}(P/{}) + ch{}(S/{})",
+                port, p_tier, star, s_tier
+            ));
         }
 
         for &ch in &self.center_channels {
-            let tier = self.profile(ch).map(|p| p.frequency_tier).unwrap_or(FrequencyTier::Unknown);
+            let tier = self
+                .profile(ch)
+                .map(|p| p.frequency_tier)
+                .unwrap_or(FrequencyTier::Unknown);
             parts.push(format!("Center: ch{}({})", ch, tier));
         }
 
@@ -1694,67 +1879,263 @@ pub fn probe_nadir_edge_for_channel(parsed: &ParseResult, ch_id: u32) -> NadirEd
             .copied()
             .collect();
     }
-    classify_nadir_edge_sliding(&pings).0
+    let edge = classify_nadir_edge_sliding(&pings).0;
+    if edge != NadirEdge::Unknown {
+        edge
+    } else {
+        infer_nadir_edge_from_gaps(&pings)
+    }
+}
+
+/// Pick the best balanced port/star pair from discovery (prefer equal ping counts).
+pub fn best_sidescan_pair_for_stitch(
+    parsed: &ParseResult,
+    discovery: &DiscoveryResult,
+) -> (Option<u32>, Option<u32>) {
+    let channels: BTreeMap<u32, Vec<&Ping>> = parsed
+        .pings
+        .iter()
+        .fold(BTreeMap::new(), |mut m, p| {
+            m.entry(p.channel).or_default().push(p);
+            m
+        });
+
+    let mut best: Option<((u32, u32), i64)> = None;
+    for &(pk, sk) in &discovery.sidescan_pairs {
+        let p_prof = discovery.profile(pk);
+        let s_prof = discovery.profile(sk);
+        if p_prof.map_or(false, |p| !is_butterfly_wing_profile(p))
+            || s_prof.map_or(false, |p| !is_butterfly_wing_profile(p))
+        {
+            eprintln!(
+                "[channel-probe] skip pair ch{}+ch{} (downscan / non-wing channel)",
+                pk, sk
+            );
+            continue;
+        }
+        let p_n = channels.get(&pk).map(|v| v.len()).unwrap_or(0) as i64;
+        let s_n = channels.get(&sk).map(|v| v.len()).unwrap_or(0) as i64;
+        if p_n < 200 || s_n < 200 {
+            continue;
+        }
+        let min_n = p_n.min(s_n);
+        let max_n = p_n.max(s_n).max(1);
+        let balance = min_n * 1000 / max_n;
+        if best.map_or(true, |(_, score)| balance > score) {
+            best = Some(((pk, sk), balance));
+        }
+    }
+
+    if let Some(((pk, sk), balance)) = best {
+        eprintln!(
+            "[channel-probe] discovery pair ch{}=port ch{}=star (balance={})",
+            pk, sk, balance
+        );
+        (Some(pk), Some(sk))
+    } else {
+        (None, None)
+    }
+}
+
+/// Whether near-range sits at the low index of the row that will be rendered.
+fn near_at_low_index_from_edge(edge: NadirEdge) -> Option<bool> {
+    match edge {
+        NadirEdge::Left => Some(true),
+        NadirEdge::Right => Some(false),
+        NadirEdge::Center | NadirEdge::Unknown => None,
+    }
+}
+
+/// Butterfly mirror: place the near-range edge on the centre seam for this wing.
+/// Port (left half) centre is at the right edge; star (right half) centre is at
+/// the left edge. Mirror when `near_at_low == is_port_half` (pure geometry).
+pub fn butterfly_mirror_for_wing(is_port_half: bool, near_at_low_index: bool) -> bool {
+    is_port_half == near_at_low_index
+}
+
+/// Geometric mirror plus shallow-strip correction for parser-reversed port wings.
+///
+/// Paired UHD exports share one rule path:
+/// - **Deep strip** (Millers, variable depth): geometric mirror only.
+/// - **Shallow strip** (Holloway, narrow water column): invert port mirror when
+///   `garmin_rsd_parser` already reversed native right-edge nadir.
+pub fn butterfly_stitch_flip_from_probe(
+    assigned_as_port: bool,
+    near_at_low: bool,
+    parser_reversed: bool,
+    probe_skip: usize,
+) -> bool {
+    let mut flip = butterfly_mirror_for_wing(assigned_as_port, near_at_low);
+    if assigned_as_port
+        && parser_reversed
+        && probe_skip > 0
+        && probe_skip < SHALLOW_RENDER_STRIP_SAMPLES
+    {
+        flip = !flip;
+    }
+    flip
+}
+
+/// Probe whether near-range is at the low end of **post-strip** samples.
+pub fn probe_near_at_low_post_strip(parsed: &ParseResult, ch_id: u32, nadir_skip: usize) -> Option<bool> {
+    let mut pings: Vec<&Ping> = parsed
+        .pings
+        .iter()
+        .filter(|p| p.channel == ch_id && p.samples.len() >= 64)
+        .collect();
+    if pings.is_empty() {
+        return None;
+    }
+    if pings.len() > 80 {
+        let step = pings.len() / 80;
+        pings = pings
+            .iter()
+            .step_by(step.max(1))
+            .take(80)
+            .copied()
+            .collect();
+    }
+
+    let mut left_votes = 0i32;
+    let mut right_votes = 0i32;
+    for p in pings {
+        let skip = nadir_skip.min(p.samples.len().saturating_sub(32));
+        let slice = &p.samples[skip..];
+        if slice.len() < 32 {
+            continue;
+        }
+        let left_gap = measure_single_nadir_gap(slice) as i32;
+        let right_gap = measure_single_nadir_gap_from_end(slice) as i32;
+        // After a proper strip, first return is at index 0 (left_gap ≈ 0).
+        if left_gap <= 12 && left_gap < right_gap {
+            left_votes += 1;
+        } else if right_gap <= 12 && right_gap < left_gap {
+            right_votes += 1;
+        } else if left_gap > right_gap + 6 {
+            left_votes += 1;
+        } else if right_gap > left_gap + 6 {
+            right_votes += 1;
+        }
+    }
+
+    if left_votes > right_votes {
+        Some(true)
+    } else if right_votes > left_votes {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// Render strip below this width: post-strip gap votes are unreliable on
+/// parser-reversed port wings (Holloway-class shallow UHD). Deep-gap paired
+/// UHD (Millers-class) uses a wider strip and keeps the geometric mirror.
+pub const SHALLOW_RENDER_STRIP_SAMPLES: usize = 45;
+
+/// Skip used for stitch-flip probing — align with the row that will be rendered.
+/// Shallow UHD gaps (e.g. Holloway ch4 gap≈17) often yield median skip 0 unless
+/// the discovery profile floor is applied.
+pub fn effective_flip_nadir_skip(
+    nadir_skip: usize,
+    discovery: Option<&DiscoveryResult>,
+    ch_id: u32,
+) -> usize {
+    if nadir_skip > 0 {
+        return nadir_skip;
+    }
+    discovery
+        .and_then(|d| d.profile(ch_id))
+        .map(|p| p.nadir_gap_width)
+        .filter(|&g| g >= 10)
+        .unwrap_or(0)
 }
 
 /// Whether butterfly/KMZ stitch should reverse this channel's samples.
 ///
-/// Uses, in order: user alignment overrides → discovery profile (nadir edge +
-/// spatial role) → live sliding-window probe on parsed pings.
+/// Uses, in order: user alignment overrides → near-range probe on the same
+/// sample row that will be rendered (`samples[nadir_skip..]`) → raw-sample
+/// fallback → gradient vote. Never hardcode port/star flips.
 pub fn resolve_stitch_flip(
     parsed: &ParseResult,
     ch_id: u32,
     assigned_as_port: bool,
     discovery: Option<&DiscoveryResult>,
     alignments: &[crate::channel_alignment::ChannelAlignment],
+    nadir_skip: usize,
 ) -> bool {
     if let Some(a) = alignments.iter().find(|a| a.channel_id == ch_id) {
         return a.flip;
     }
 
-    let profile = discovery.and_then(|d| d.profile(ch_id));
-    let nadir_edge = profile
-        .map(|p| p.nadir_edge)
-        .filter(|e| *e != NadirEdge::Unknown)
-        .unwrap_or_else(|| probe_nadir_edge_for_channel(parsed, ch_id));
+    let probe_skip = effective_flip_nadir_skip(nadir_skip, discovery, ch_id);
+    let post_strip_probe = if probe_skip > 0 {
+        probe_near_at_low_post_strip(parsed, ch_id, probe_skip)
+    } else {
+        None
+    };
 
-    let is_port_half = profile
-        .map(|p| {
-            matches!(
-                p.spatial_role,
-                SpatialRole::Port | SpatialRole::SingleSidePort
-            )
+    let mut near_at_low = post_strip_probe.unwrap_or_else(|| {
+        let profile = discovery.and_then(|d| d.profile(ch_id));
+        let edge = profile
+            .and_then(|p| {
+                if p.nadir_edge != NadirEdge::Unknown {
+                    Some(p.nadir_edge)
+                } else if p.nadir_gap_width >= 10 {
+                    let pings: Vec<&Ping> = parsed
+                        .pings
+                        .iter()
+                        .filter(|ping| ping.channel == ch_id && ping.samples.len() >= 32)
+                        .take(80)
+                        .collect();
+                    let inferred = infer_nadir_edge_from_gaps(&pings);
+                    if inferred != NadirEdge::Unknown {
+                        Some(inferred)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| probe_nadir_edge_for_channel(parsed, ch_id));
+        near_at_low_index_from_edge(edge).unwrap_or_else(|| {
+            stitch_flip_gradient_vote_near_low(parsed, ch_id, probe_skip)
         })
-        .unwrap_or(assigned_as_port);
+    });
 
-    let flip = stitch_flip_for_half(is_port_half, nadir_edge, parsed, ch_id);
+    // Shallow nadir gap: trust profile edge only when post-strip probe was inconclusive.
+    if post_strip_probe.is_none() {
+        if let Some(p) = discovery.and_then(|d| d.profile(ch_id)) {
+            if p.nadir_gap_width < 45 {
+                if let Some(edge_low) = near_at_low_index_from_edge(p.nadir_edge) {
+                    near_at_low = edge_low;
+                }
+            }
+        }
+    }
+
+    let flip = butterfly_stitch_flip_from_probe(
+        assigned_as_port,
+        near_at_low,
+        parsed.reversed_channels.contains(&ch_id),
+        probe_skip,
+    );
 
     eprintln!(
-        "[stitch-flip] ch{} role={} nadir={:?} parser_rev={} → flip={}",
+        "[stitch-flip] ch{} role={} near_low={} nadir_skip={} probe_skip={} parser_rev={} → flip={}",
         ch_id,
-        if is_port_half { "port" } else { "star" },
-        nadir_edge,
+        if assigned_as_port { "port" } else { "star" },
+        near_at_low,
+        nadir_skip,
+        probe_skip,
         parsed.reversed_channels.contains(&ch_id),
         flip
     );
     flip
 }
 
-/// Map nadir position + wing role to a mirror decision for butterfly layout.
-fn stitch_flip_for_half(is_port_half: bool, nadir_edge: NadirEdge, parsed: &ParseResult, ch_id: u32) -> bool {
-    match nadir_edge {
-        // Near-range at sample[0]: port mirrors, starboard does not.
-        NadirEdge::Left => is_port_half,
-        // Near-range at sample[max]: starboard mirrors, port does not.
-        NadirEdge::Right => !is_port_half,
-        // Centre-beam / paired internal gap — leave sample order as-is.
-        NadirEdge::Center => false,
-        NadirEdge::Unknown => stitch_flip_gradient_vote(parsed, ch_id, is_port_half),
-    }
-}
-
-/// Last-resort vote: count pings whose water-column gap is closer to start vs end.
-fn stitch_flip_gradient_vote(parsed: &ParseResult, ch_id: u32, is_port_half: bool) -> bool {
+/// Last-resort vote: which end of the render row has the water-column gap.
+fn stitch_flip_gradient_vote_near_low(parsed: &ParseResult, ch_id: u32, nadir_skip: usize) -> bool {
     let pings: Vec<&Ping> = parsed
         .pings
         .iter()
@@ -1762,22 +2143,27 @@ fn stitch_flip_gradient_vote(parsed: &ParseResult, ch_id: u32, is_port_half: boo
         .take(80)
         .collect();
     if pings.is_empty() {
-        return is_port_half;
+        return true;
     }
 
     let mut left_votes = 0i32;
     let mut right_votes = 0i32;
 
     for p in &pings {
-        let n = p.samples.len();
-        let mut sorted = p.samples.clone();
+        let skip = nadir_skip.min(p.samples.len().saturating_sub(32));
+        let slice = &p.samples[skip..];
+        if slice.len() < 32 {
+            continue;
+        }
+        let n = slice.len();
+        let mut sorted: Vec<u16> = slice.iter().copied().collect();
         sorted.sort_unstable();
         let p15 = sorted[(n * 15 / 100).min(n - 1)] as f32;
         let p90 = sorted[(n * 90 / 100).min(n - 1)] as f32;
         let threshold = (p15 + (p90 - p15).max(1.0) * 0.20) as u16;
 
-        let left_gap = p.samples.iter().take(n / 3).filter(|&&s| s <= threshold).count();
-        let right_gap = p.samples.iter().skip(n * 2 / 3).filter(|&&s| s <= threshold).count();
+        let left_gap = slice.iter().take(n / 3).filter(|&&s| s <= threshold).count();
+        let right_gap = slice.iter().skip(n * 2 / 3).filter(|&&s| s <= threshold).count();
 
         if left_gap > right_gap + 4 {
             left_votes += 1;
@@ -1786,14 +2172,239 @@ fn stitch_flip_gradient_vote(parsed: &ParseResult, ch_id: u32, is_port_half: boo
         }
     }
 
-    let edge = if left_votes > right_votes {
-        NadirEdge::Left
+    if left_votes > right_votes {
+        true
     } else if right_votes > left_votes {
-        NadirEdge::Right
+        false
     } else {
-        return is_port_half;
+        true
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §12b  STITCH LAYOUT PROPOSAL (confidence gate)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Confidence below this → ask the user to pick a layout before mosaic/video.
+pub const LAYOUT_CONFIRM_THRESHOLD: f32 = 0.65;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StitchLayoutCandidate {
+    pub id: String,
+    pub label: String,
+    pub confidence: f32,
+    /// `butterfly` | `single_wing`
+    pub mode: String,
+    pub port_channel: Option<u32>,
+    pub star_channel: Option<u32>,
+    pub warnings: Vec<String>,
+    pub port_flip: bool,
+    pub star_flip: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StitchLayoutProposal {
+    pub auto_confidence: f32,
+    pub needs_confirmation: bool,
+    pub recommended_id: String,
+    pub candidates: Vec<StitchLayoutCandidate>,
+}
+
+fn wing_flip_hint(
+    parsed: &ParseResult,
+    discovery: &DiscoveryResult,
+    ch: u32,
+    as_port: bool,
+) -> bool {
+    let skip = discovery
+        .profile(ch)
+        .map(|p| p.nadir_gap_width)
+        .filter(|&g| g >= 10)
+        .unwrap_or(0);
+    resolve_stitch_flip(parsed, ch, as_port, Some(discovery), &[], skip)
+}
+
+fn score_layout_candidate(
+    parsed: &ParseResult,
+    discovery: &DiscoveryResult,
+    port: Option<u32>,
+    star: Option<u32>,
+    mode: &str,
+    base: f32,
+) -> (f32, Vec<String>) {
+    let mut conf = base;
+    let mut warnings = Vec::new();
+
+    for (ch, as_port) in [(port, true), (star, false)] {
+        let Some(ch) = ch else { continue };
+        if let Some(p) = discovery.profile(ch) {
+            if p.archetype_confidence < 0.72 {
+                conf -= 0.12;
+                warnings.push(format!(
+                    "ch{ch} classification {:.0}%",
+                    p.archetype_confidence * 100.0
+                ));
+            }
+            if p.nadir_gap_width < SHALLOW_RENDER_STRIP_SAMPLES
+                && parsed.reversed_channels.contains(&ch)
+            {
+                warnings.push(format!("ch{ch} shallow gap + parser reversed"));
+                conf -= 0.06;
+            }
+        }
+        let _ = as_port;
+    }
+
+    if mode == "butterfly" {
+        if let (Some(pk), Some(sk)) = (port, star) {
+            let pn = parsed.pings.iter().filter(|p| p.channel == pk).count();
+            let sn = parsed.pings.iter().filter(|p| p.channel == sk).count();
+            let balance = (pn.min(sn) as f32) / (pn.max(sn).max(1) as f32);
+            conf = conf * 0.5 + balance * 0.5;
+            if balance < 0.5 {
+                warnings.push(format!("ping imbalance ch{pk}={pn} ch{sk}={sn}"));
+                conf -= 0.1;
+            }
+        }
+    }
+
+    (conf.clamp(0.05, 0.99), warnings)
+}
+
+/// Enumerate stitch layout options with confidence for UI / CLI selection.
+pub fn propose_stitch_layouts(
+    parsed: &ParseResult,
+    discovery: &DiscoveryResult,
+) -> StitchLayoutProposal {
+    let mut candidates: Vec<StitchLayoutCandidate> = Vec::new();
+
+    if let Some((Some(wing), None)) = gt51_single_wing_pair(parsed, discovery) {
+        let (conf, warnings) =
+            score_layout_candidate(parsed, discovery, Some(wing), None, "single_wing", 0.88);
+        candidates.push(StitchLayoutCandidate {
+            id: format!("gt51_ch{wing}"),
+            label: format!("GT51 single-wing ch{wing} + downscan nadir fill"),
+            confidence: conf,
+            mode: "single_wing".to_string(),
+            port_channel: Some(wing),
+            star_channel: None,
+            warnings,
+            port_flip: wing_flip_hint(parsed, discovery, wing, true),
+            star_flip: false,
+        });
+    }
+
+    for &(pk, sk) in &discovery.sidescan_pairs {
+        if !discovery.profile(pk).map_or(false, is_butterfly_wing_profile)
+            || !discovery.profile(sk).map_or(false, is_butterfly_wing_profile)
+        {
+            continue;
+        }
+        let id = format!("butterfly_ch{pk}_ch{sk}");
+        if candidates.iter().any(|c| c.id == id) {
+            continue;
+        }
+        let (conf, warnings) =
+            score_layout_candidate(parsed, discovery, Some(pk), Some(sk), "butterfly", 0.82);
+        candidates.push(StitchLayoutCandidate {
+            id,
+            label: format!("Butterfly port ch{pk} + star ch{sk}"),
+            confidence: conf,
+            mode: "butterfly".to_string(),
+            port_channel: Some(pk),
+            star_channel: Some(sk),
+            warnings,
+            port_flip: wing_flip_hint(parsed, discovery, pk, true),
+            star_flip: wing_flip_hint(parsed, discovery, sk, false),
+        });
+    }
+
+    let (dpk, dsk) = best_sidescan_pair_for_stitch(parsed, discovery);
+    if let (Some(pk), Some(sk)) = (dpk, dsk) {
+        let id = format!("discovery_ch{pk}_ch{sk}");
+        if !candidates.iter().any(|c| c.id == id) {
+            let (conf, warnings) =
+                score_layout_candidate(parsed, discovery, Some(pk), Some(sk), "butterfly", 0.80);
+            candidates.push(StitchLayoutCandidate {
+                id,
+                label: format!("Discovery pair ch{pk} + ch{sk}"),
+                confidence: conf,
+                mode: "butterfly".to_string(),
+                port_channel: Some(pk),
+                star_channel: Some(sk),
+                warnings,
+                port_flip: wing_flip_hint(parsed, discovery, pk, true),
+                star_flip: wing_flip_hint(parsed, discovery, sk, false),
+            });
+        }
+    }
+
+    candidates.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let recommended_id = candidates
+        .first()
+        .map(|c| c.id.clone())
+        .unwrap_or_else(|| "none".to_string());
+    let auto_confidence = candidates.first().map(|c| c.confidence).unwrap_or(0.0);
+    let runner_up = candidates.get(1).map(|c| c.confidence).unwrap_or(0.0);
+    let close_runner = auto_confidence - runner_up < 0.12;
+    let needs_confirmation =
+        auto_confidence < LAYOUT_CONFIRM_THRESHOLD || (close_runner && auto_confidence < 0.80);
+
+    StitchLayoutProposal {
+        auto_confidence,
+        needs_confirmation,
+        recommended_id,
+        candidates,
+    }
+}
+
+/// Resolve sidescan pair + per-wing flips from an explicit layout id or the recommendation.
+pub fn sidescan_pair_from_layout(
+    proposal: &StitchLayoutProposal,
+    layout_id: Option<&str>,
+) -> (Option<u32>, Option<u32>, Vec<crate::channel_alignment::ChannelAlignment>) {
+    let pick = layout_id
+        .and_then(|id| proposal.candidates.iter().find(|c| c.id == id))
+        .or_else(|| {
+            proposal
+                .candidates
+                .iter()
+                .find(|c| c.id == proposal.recommended_id)
+        })
+        .or_else(|| proposal.candidates.first());
+
+    let Some(c) = pick else {
+        return (None, None, Vec::new());
     };
-    stitch_flip_for_half(is_port_half, edge, parsed, ch_id)
+
+    let mut alignments = Vec::new();
+    if let Some(pk) = c.port_channel {
+        alignments.push(crate::channel_alignment::ChannelAlignment {
+            channel_id: pk,
+            role: "port_sidescan".to_string(),
+            generation: String::new(),
+            flip: c.port_flip,
+            invert: false,
+        });
+    }
+    if let Some(sk) = c.star_channel {
+        alignments.push(crate::channel_alignment::ChannelAlignment {
+            channel_id: sk,
+            role: "starboard_sidescan".to_string(),
+            generation: String::new(),
+            flip: c.star_flip,
+            invert: false,
+        });
+    }
+
+    (c.port_channel, c.star_channel, alignments)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1821,10 +2432,30 @@ mod tests {
     }
 
     #[test]
+    fn test_butterfly_mirror_geometry() {
+        assert!(butterfly_mirror_for_wing(true, true)); // port, near at xi=0
+        assert!(!butterfly_mirror_for_wing(false, true)); // star, near at xi=0
+        assert!(!butterfly_mirror_for_wing(true, false)); // port, near at high xi
+        assert!(butterfly_mirror_for_wing(false, false)); // star, near at high xi
+    }
+
+    #[test]
+    fn test_shallow_parser_port_correction() {
+        // Holloway-class: shallow strip + parser_rev port inverts geometric false → true
+        assert!(butterfly_stitch_flip_from_probe(true, false, true, 17));
+        // Millers-class: deep strip keeps geometric false
+        assert!(!butterfly_stitch_flip_from_probe(true, false, true, 250));
+        // Starboard never gets shallow port correction
+        assert!(butterfly_stitch_flip_from_probe(false, false, true, 17));
+        // No parser reversal → geometric only
+        assert!(!butterfly_stitch_flip_from_probe(true, false, false, 17));
+    }
+
+    #[test]
     fn test_nadir_gap_sidescan_pattern() {
-        // Simulate SideVü: 50 low samples (water column), then signal
-        let mut samples = vec![10u16; 50];
-        samples.extend(vec![500u16; 450]);
+        // Simulate SideVü: water column must exceed 15th percentile mass (p15 index)
+        let mut samples = vec![10u16; 120];
+        samples.extend(vec![500u16; 380]);
         let gap = measure_single_nadir_gap(&samples);
         assert!(gap >= 40, "Expected nadir gap ≥40, got {}", gap);
     }
@@ -1850,7 +2481,7 @@ mod tests {
             median_peak_position: 0.6,
             energy_front_back_ratio: 0.8,
         };
-        let (archetype, _, _) = classify_archetype(60, 800, &spike, 5.5, 4);
+        let (archetype, _, _) = classify_archetype(60, 800, &spike, 5.5, 4, 0.0);
         assert_eq!(archetype, SignalArchetype::SideVu);
     }
 
@@ -1861,8 +2492,7 @@ mod tests {
             median_peak_position: 0.15,
             energy_front_back_ratio: 8.0,
         };
-        let (archetype, _, _) = classify_archetype(2, 150, &spike, 4.0, 6);
+        let (archetype, _, _) = classify_archetype(2, 150, &spike, 4.0, 6, 0.0);
         assert_eq!(archetype, SignalArchetype::DownVuClearVu);
     }
 }
-

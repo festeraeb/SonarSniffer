@@ -1,0 +1,99 @@
+---
+description: SonarSniffer butterfly stitch orientation — dynamic probe only, no hardcoded flips
+globs: "{src/**,desktop/src-tauri/src/**}/channel_discovery.rs,**/outputs.rs"
+alwaysApply: true
+---
+
+# Butterfly stitch orientation (SonarSniffer)
+
+## Never hardcode
+
+- Do **not** hardcode `port always flip`, `starboard always flip`, or per-device tables (GT51, GT54, UHD, etc.).
+- Do **not** tie flip to `nadir_skip > 0` alone. Skip amount varies by file, depth, and range changes.
+- User alignment overrides (`ChannelAlignment.flip`) are the only intentional fixed per-device settings.
+
+## Probe order (render path)
+
+1. Compute per-ping nadir skip (`detect_per_ping_nadir` / smoothed offsets).
+2. **Butterfly stitch must use full water-column strip** — never cap at 30 samples. A ring-down-only trim leaves the nadir band in the row and flip places it on the outer edge (inside-out).
+3. Profile gap floor **≥10 samples** on full-strip mosaics (`per_ping_nadir_skip_with_profile`, `compute_nadir_skip_offsets`) so shallow UHD water columns are stripped before flip.
+4. Flip probe uses `effective_flip_nadir_skip` (median render skip, or profile gap when median is 0).
+5. Probe near-range on **`samples[probe_skip..]`** (same row that will be rendered).
+6. Apply `butterfly_mirror_for_wing`, then `butterfly_stitch_flip_from_probe` shallow correction.
+7. Render with skip + flip.
+
+Alignment is evaluated **after** nadir offsets are known and **on post-strip samples**, not on raw pre-strip arrays alone.
+
+## Geometric mirror rule (data-driven outcome)
+
+Butterfly centre seam is between the two wings:
+
+- Port (left half): centre = right edge of left wing.
+- Star (right half): centre = left edge of right wing.
+
+If near-range is at **low index** of the render row (`near_at_low = true`):
+
+- Port mirrors (`flip = true`), star does not (`flip = false`).
+
+If near-range is at **high index** (`near_at_low = false`):
+
+- Port does not mirror, star mirrors.
+
+Formula: `flip = is_port_half == near_at_low_index` (`butterfly_mirror_for_wing`).
+
+### Shallow paired UHD correction (Millers vs Holloway)
+
+Same paired-UHD path; difference is **render strip width**, not file name:
+
+| Class | `probe_skip` | Parser-rev port | Result |
+|-------|----------------|-----------------|--------|
+| Deep-gap UHD (Millers) | ≥ 45 | yes | geometric mirror only |
+| Shallow-gap UHD (Holloway) | 10–44 | yes | **invert** port geometric mirror |
+
+`butterfly_stitch_flip_from_probe`: when `assigned_as_port && parser_reversed && 0 < probe_skip < 45`, flip `=!flip`. Starboard wings are unchanged.
+
+## Parser interaction
+
+- `garmin_rsd_parser` may reverse channels whose native nadir was on the right edge (`reversed_channels`).
+- Flip logic runs on **post-parse** samples; shallow port correction accounts for parse-time reversal — do not hardcode per file.
+- Wing role for stitch comes from **butterfly assignment** (`assigned_as_port`), not Garmin discovery labels.
+
+## Export layout combos (same flip path when butterfly)
+
+| Layout | Channels | Stitch mode | Flip path |
+|--------|----------|-------------|-----------|
+| UHD classic paired | ch4 + ch5 | butterfly | `resolve_stitch_flip` + shallow correction |
+| UHD cross-gen paired | ch4 + ch3 (or ch1) | butterfly | same — use balanced discovery pair |
+| Series 10 | ch10 + ch11 | butterfly | same |
+| GT51 / patent export | ch4 + ch6, no ch5 | single-wing + downscan fill | ch4 only; ch6 never a wing |
+| Single ClearVü arm | one SideVü channel | single-wing | downscan nadir fill if present |
+
+## Pair selection
+
+- Prefer discovery's most **ping-balanced** sidescan pair (`best_sidescan_pair_for_stitch`).
+- Avoid mixing classic 2× ping channels with UHD wings on one butterfly.
+- **Never pair sidescan + downscan** as butterfly wings (`is_known_downscan_channel_id`, `is_butterfly_wing_profile`).
+- **GT51 / Y-cable export** (`ch4` present, `ch6` downscan, **no `ch5`**): treat as **single-wing** sidescan + downscan nadir fill — not ch4+ch6 butterfly.
+
+## GT51 / medium-CHIRP layout (field notes)
+
+GT51 differs from GT56 UHD high-frequency wings:
+
+- Medium-CHIRP (260/455 kHz) + 600 W traditional: **wider lateral swath**, **narrower water column** vs GT56.
+- Physical **Y-cable** (port + star transducers) may export as one merged sidescan channel or asymmetric wings.
+- Shallow nadir gap: use profile edge only when post-strip probe is inconclusive (not as override when probe succeeded).
+- Third-party viewers often need track/depth offset and per-wing TVG; SonarSniffer does not hardcode those — use discovery + probe.
+
+## Verification files (regression)
+
+After any stitch-orientation change, visually check `mosaic_combined.png` on:
+
+1. **Millers Folley Cove** — UHD classic, ch4+ch3 balanced pair
+2. **Holloway** — UHD classic ch4+ch5; shallow gap, port wing may need mirror via `nadir_edge`
+3. **Sonar010** — GT51/export layout ch4 + ch6 downscan (single-wing, not butterfly)
+
+Nadir should meet at butterfly centre; seabed texture radiates outward. No inside-out (far-field at centre) or double-gap water column at seam.
+
+## Logging
+
+Keep `[stitch-flip] ch{N} role=… near_low=… nadir_skip=… → flip=…` for field diagnosis.

@@ -477,6 +477,31 @@ input::placeholder { color: var(--ink-dim); opacity: 0.5; }
   text-decoration: underline;
 }
 
+/* ===== Layout picker ===== */
+.layout-picker {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #f8fafc;
+}
+.layout-picker.hidden { display: none; }
+.layout-candidates { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.layout-card {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  cursor: pointer;
+}
+.layout-card:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
 /* ===== Utilities ===== */
 .muted { color: var(--ink-dim); }
 .small { font-size: 0.8rem; }
