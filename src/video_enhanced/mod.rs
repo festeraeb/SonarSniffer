@@ -295,6 +295,71 @@ pub struct ProcessingStats {
     pub clahe_applied: bool,
 }
 
+/// Slice a pre-rendered stitched mosaic into fixed-height video frames.
+pub fn mosaic_to_frames(mosaic: &image::RgbImage, frame_height: u32) -> Vec<ProcessedFrame> {
+    let width = mosaic.width();
+    let height = mosaic.height();
+    if width == 0 || height == 0 {
+        return vec![];
+    }
+    let fh = frame_height.max(1).min(height);
+    let n_frames = (height + fh - 1) / fh;
+    let mut frames = Vec::with_capacity(n_frames as usize);
+    for fi in 0..n_frames {
+        let y0 = fi * fh;
+        let y1 = (y0 + fh).min(height);
+        let mut pixels = vec![0u8; (width * fh * 3) as usize];
+        for y in y0..y1 {
+            for x in 0..width {
+                let px = mosaic.get_pixel(x, y);
+                let off = ((y - y0) * width + x) as usize * 3;
+                pixels[off] = px[0];
+                pixels[off + 1] = px[1];
+                pixels[off + 2] = px[2];
+            }
+        }
+        frames.push(ProcessedFrame {
+            pixels,
+            width,
+            height: fh,
+        });
+    }
+    frames
+}
+
+/// Encode video directly from an enhanced stitched mosaic image.
+pub fn render_mosaic_waterfall<F>(
+    mosaic: image::RgbImage,
+    output_dir: &Path,
+    fps: u32,
+    frame_height: u32,
+    on_progress: F,
+) -> anyhow::Result<EnhancedVideoResult>
+where
+    F: Fn(u32, u32) + Send + 'static,
+{
+    use anyhow::Context;
+    let mut params = SonarProcessingParams::high_quality();
+    params.fps = fps.max(1);
+    params.video_height = frame_height.max(1);
+    let frames = mosaic_to_frames(&mosaic, params.video_height);
+    let stats = DatasetStatistics {
+        total_pings: frames.len(),
+        primary_channel: 0,
+        max_samples: mosaic.width() as usize / 2,
+        raw_min: 0.0,
+        raw_max: 255.0,
+        raw_mean: 128.0,
+        raw_stddev: 64.0,
+        percentile_floor: 1.0,
+        percentile_ceiling: 254.0,
+        histogram: [0; 256],
+        gaps: vec![],
+    };
+    encode_to_video(frames, output_dir, &params, &stats, on_progress)
+        .context("Failed to encode mosaic video")
+}
+
 /// High-level API: Render enhanced waterfall with automatic parameter selection.
 ///
 /// This function:

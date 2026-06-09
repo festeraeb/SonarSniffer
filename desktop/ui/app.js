@@ -1,9 +1,15 @@
 const invoke = window.__TAURI__?.core?.invoke;
+const listen = window.__TAURI__?.event?.listen;
 const openUrl = window.__TAURI__?.plugin?.opener?.openUrl;
+const openPath = window.__TAURI__?.plugin?.opener?.openPath;
 
 const state = {
   license: null,
   preflight: null,
+  lastOutputDir: null,
+  unlistenProgress: null,
+  unlistenVideo: null,
+  unlistenVideoComplete: null,
 };
 
 function setText(id, value) {
@@ -18,6 +24,69 @@ function setConsole(id, value) {
 
 function prettyJson(value) {
   return JSON.stringify(value, null, 2);
+}
+
+function showProgress(show) {
+  document.getElementById("pipelineProgress")?.classList.toggle("hidden", !show);
+}
+
+function setProgress(step, pct) {
+  const clamped = Math.max(0, Math.min(100, Number(pct) || 0));
+  setText("progressStep", step || "Working…");
+  setText("progressPct", `${clamped}%`);
+  const bar = document.getElementById("progressBar");
+  if (bar) bar.style.width = `${clamped}%`;
+}
+
+function showCompleteLink(outputDir) {
+  const node = document.getElementById("pipelineComplete");
+  if (!node || !outputDir) return;
+  node.classList.remove("hidden");
+  node.innerHTML = `Pipeline complete — <a href="#" id="openOutputLink">Open output folder</a>`;
+  document.getElementById("openOutputLink")?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    try {
+      if (openPath) {
+        await openPath(outputDir);
+      } else {
+        await invoke("pick_folder");
+      }
+    } catch (error) {
+      setConsole("pipelineOutput", `Could not open folder: ${error}`);
+    }
+  });
+}
+
+function hideCompleteLink() {
+  const node = document.getElementById("pipelineComplete");
+  if (node) {
+    node.classList.add("hidden");
+    node.innerHTML = "";
+  }
+}
+
+async function setupProgressListeners() {
+  if (!listen) return;
+  if (state.unlistenProgress) await state.unlistenProgress();
+  if (state.unlistenVideo) await state.unlistenVideo();
+  if (state.unlistenVideoComplete) await state.unlistenVideoComplete();
+
+  state.unlistenProgress = await listen("pipeline-progress", (event) => {
+    const { step, pct } = event.payload || {};
+    setProgress(step, pct);
+  });
+
+  state.unlistenVideo = await listen("video-progress", (event) => {
+    const { pct, frame, total } = event.payload || {};
+    const label = total ? `Rendering video (frame ${frame}/${total})` : "Rendering video…";
+    const mapped = 92 + Math.round((Number(pct) || 0) * 0.07);
+    setProgress(label, mapped);
+  });
+
+  state.unlistenVideoComplete = await listen("video-complete", (event) => {
+    const ok = event.payload?.ok;
+    setProgress(ok ? "Video export complete" : "Video export failed", 100);
+  });
 }
 
 function renderDepsList(containerId, report) {
@@ -138,50 +207,31 @@ async function refreshLicense() {
         ? "Private build: license prompts are disabled."
         : "Full license active.";
     } else if (status.state === "trial") {
-      const installed = status.first_installed ? ` (installed ${status.first_installed})` : "";
-      summary = `30-day trial: ${status.days_remaining} day(s) remaining${installed}.`;
+      summary = `Trial active: ${status.days_remaining} day(s) remaining.`;
     } else {
-      summary = "Trial expired. Enter your 20-digit license code to unlock SonarSniffer.";
+      summary = "Trial expired. Enter a valid license key to unlock SonarSniffer.";
     }
     setText("licenseSummary", summary);
-    setText("licenseContact", `License support: ${status.contact_email}`);
-    setText(
-      "licenseMessage",
-      status.private_build
-        ? "This installer is pre-unlocked for internal use."
-        : status.state === "trial"
-          ? "Trial started on first launch. Video export uses built-in AV1 (rav1e)."
-          : ""
-    );
+    setText("licenseContact", `For a full license key contact: ${status.contact_email}`);
+    setText("licenseMessage", status.private_build ? "This installer is pre-unlocked for internal use." : "Public key for current testing: 8106940539");
     const keyInput = document.getElementById("licenseKey");
     const activateButton = document.getElementById("activateLicenseBtn");
-    const unlocked = status.private_build || status.state === "unlocked";
-    if (keyInput) {
-      keyInput.disabled = unlocked;
-      if (unlocked) keyInput.value = "";
-    }
-    if (activateButton) activateButton.disabled = unlocked;
+    if (keyInput) keyInput.disabled = status.private_build;
+    if (activateButton) activateButton.disabled = status.private_build;
   } catch (error) {
     setText("licenseSummary", `License check failed: ${error}`);
   }
 }
 
 async function activateLicense() {
-  const keyInput = document.getElementById("licenseKey");
-  const key = keyInput?.value?.trim();
+  const key = document.getElementById("licenseKey")?.value?.trim();
   if (!key) {
-    setText("licenseMessage", "Enter your 20-digit license code first.");
-    return;
-  }
-  const digits = key.replace(/\D/g, "");
-  if (digits.length !== 20) {
-    setText("licenseMessage", "License code must be exactly 20 digits.");
+    setText("licenseMessage", "Enter a license key first.");
     return;
   }
   try {
     await invoke("activate_license", { key });
-    if (keyInput) keyInput.value = "";
-    setText("licenseMessage", "License activated. Thank you.");
+    setText("licenseMessage", "License activated.");
     await refreshLicense();
   } catch (error) {
     setText("licenseMessage", String(error));
@@ -207,12 +257,8 @@ async function browseFolder() {
 }
 
 async function runPipeline() {
-  if (state.license?.state === "expired") {
-    setConsole("pipelineOutput", `Trial expired. Enter a 20-digit license code or contact ${state.license.contact_email}.`);
-    return;
-  }
   if (!state.preflight?.ready) {
-    setConsole("pipelineOutput", "Install required dependencies first (WebView2 on Windows).");
+    setConsole("pipelineOutput", "Install required dependencies first (GStreamer + WebView2 on Windows).");
     return;
   }
   const fileName = document.getElementById("pipelineInput")?.value?.trim();
@@ -221,12 +267,17 @@ async function runPipeline() {
     return;
   }
   const outDir = document.getElementById("outputFolder")?.value?.trim();
+  if (!outDir) {
+    setConsole("pipelineOutput", "Choose an output folder before running the pipeline.");
+    return;
+  }
+
   const selectedMap = document.querySelector(".swatch.selected")?.dataset?.map || "amber";
   const options = {
+    outputDir: outDir,
     video: Boolean(document.getElementById("enableVideo")?.checked),
     mosaic: Boolean(document.getElementById("enableMosaic")?.checked),
     curveletDenoise: Boolean(document.getElementById("enableCurvelet")?.checked),
-    soundtiles: Boolean(document.getElementById("enableSoundtiles")?.checked),
     colormap: selectedMap,
     waterfall: true,
     kml: true,
@@ -235,39 +286,25 @@ async function runPipeline() {
     arcgis: true,
     webViewer: true,
   };
-  if (outDir) options.output_dir = outDir;
 
-  setConsole("pipelineOutput", "Running SonarSniffer pipeline...");
+  hideCompleteLink();
+  showProgress(true);
+  setProgress("Starting pipeline…", 0);
+  setConsole("pipelineOutput", "Running SonarSniffer pipeline…");
+  state.lastOutputDir = null;
+
   try {
     const result = await invoke("run_sonar_pipeline", { fileName, options });
+    const outputDir = result?.outputs?.outputDir || result?.outputs?.output_dir;
+    state.lastOutputDir = outputDir || null;
+    setProgress(result?.videoRendering ? "Video rendering in background…" : "Complete", 100);
     setConsole("pipelineOutput", prettyJson(result));
+    if (outputDir) {
+      showCompleteLink(outputDir);
+    }
   } catch (error) {
+    setProgress("Pipeline failed", 0);
     setConsole("pipelineOutput", `Pipeline failed:\n${error}`);
-  }
-}
-
-async function runSoundtiles() {
-  const input = document.getElementById("soundtilesInput")?.value?.trim();
-  if (!input) {
-    setConsole("soundtilesOutput", "Select an input file first.");
-    return;
-  }
-  const channel = document.getElementById("soundtilesChannel")?.value?.trim() || "auto";
-  const tiles = Number(document.getElementById("soundtilesTiles")?.value || 20);
-  const verbose = Boolean(document.getElementById("soundtilesVerbose")?.checked);
-  setConsole("soundtilesOutput", "Running SoundTiles...");
-  try {
-    const result = await invoke("run_soundtiles", { input, channel, tiles, verbose });
-    const combined = [
-      `Executable: ${result.executable}`,
-      `Exit code: ${result.exit_code}`,
-      "",
-      result.stdout || "<no stdout>",
-      result.stderr ? `\n[stderr]\n${result.stderr}` : "",
-    ].join("\n");
-    setConsole("soundtilesOutput", combined);
-  } catch (error) {
-    setConsole("soundtilesOutput", `SoundTiles failed:\n${error}`);
   }
 }
 
@@ -278,12 +315,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("installAllDepsBtn")?.addEventListener("click", installAll);
   document.getElementById("installAllDepsBtnInline")?.addEventListener("click", installAll);
   document.getElementById("browsePipelineBtn")?.addEventListener("click", () => browseInput("pipelineInput"));
-  document.getElementById("browseSoundtilesBtn")?.addEventListener("click", () => browseInput("soundtilesInput"));
   document.getElementById("browseFolderBtn")?.addEventListener("click", browseFolder);
   document.getElementById("runPipelineBtn")?.addEventListener("click", runPipeline);
-  document.getElementById("runSoundtilesBtn")?.addEventListener("click", runSoundtiles);
 
-  // Colormap swatch selection
   document.getElementById("colormapSwatches")?.addEventListener("click", (e) => {
     const btn = e.target.closest(".swatch");
     if (!btn) return;
@@ -291,5 +325,18 @@ window.addEventListener("DOMContentLoaded", async () => {
     btn.classList.add("selected");
   });
 
+  document.querySelectorAll(".nav-item").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const section = btn.dataset.section;
+      document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
+      btn.classList.add("active");
+      for (const el of document.querySelectorAll("[id^='section-']")) {
+        if (el.id === "section-status") continue;
+        el.classList.toggle("hidden", el.id !== `section-${section}`);
+      }
+    });
+  });
+
+  await setupProgressListeners();
   await Promise.all([refreshLicense(), refreshDependencies()]);
 });

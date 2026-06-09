@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "tauri-appsonarsniffer"
-version = "0.8.5"
+version = "0.8.6"
 description = "SonarSniffer by NautiDog Sailing"
 authors = ["NautiDog Sailing"]
 edition = "2021"

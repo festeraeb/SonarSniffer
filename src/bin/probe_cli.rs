@@ -277,9 +277,6 @@ fn main() {
                 }
 
                 let mut opts = PipelineOptions::default();
-                opts.video = true;
-                opts.mosaic = true;
-                opts.waterfall = true;
                 // Use output dir next to the file
                 opts.output_dir = Some(path.parent().unwrap_or(std::path::Path::new("."))
                     .join("output").to_string_lossy().to_string());

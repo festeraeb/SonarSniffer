@@ -430,6 +430,53 @@ input::placeholder { color: var(--ink-dim); opacity: 0.5; }
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
 }
 
+/* ===== Pipeline progress ===== */
+.progress-panel {
+  margin: 16px 0 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #f8fafc;
+}
+
+.progress-panel.hidden { display: none; }
+
+.progress-label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+  color: var(--ink-dim);
+}
+
+.progress-track {
+  height: 10px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--teal));
+  transition: width 0.25s ease;
+}
+
+.complete-link {
+  margin: 12px 0 4px;
+  font-size: 0.9rem;
+}
+
+.complete-link.hidden { display: none; }
+
+.complete-link a {
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 /* ===== Utilities ===== */
 .muted { color: var(--ink-dim); }
 .small { font-size: 0.8rem; }

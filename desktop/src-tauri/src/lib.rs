@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod cerulean_parser;
 pub mod channel_alignment;
 pub mod channel_discovery;
@@ -106,7 +104,7 @@ fn setup_bundled_gstreamer() {
         deps::ensure_windows_gstreamer_environment();
         return;
     }
-    eprintln!("[gstreamer] GStreamer not found — legacy H.264 path unavailable (AV1 encoder is default)");
+    eprintln!("[gstreamer] GStreamer not found — video will fall back to GIF");
     deps::ensure_windows_gstreamer_environment();
 }
 
@@ -355,16 +353,10 @@ async fn run_sonar_pipeline(
     options: Option<PipelineOptions>,
     app: tauri::AppHandle,
 ) -> Result<PipelineResponse, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
-    license::ensure_licensed(data_dir)?;
-
     let pre = deps::preflight_report();
     if !pre.ready {
         return Err(format!(
-            "{}\n\nInstall required components from the Dependencies panel, then Re-check.",
+            "{}\n\nInstall GStreamer and WebView2 from the Dependencies panel, then Re-check.",
             pre.summary
         ));
     }
@@ -593,6 +585,8 @@ pub fn run_pipeline_internal(
             enhanced.sort_by_key(|p| p.sequence);
             enhanced
         };
+        let sidescan_pair = outputs::find_sidescan_pair(&parse);
+        let parse_for_video = parse.clone();
         let vid_dir_clone = vid_dir.clone();
         let app_progress = app.clone();
         let app_done = app.clone();
@@ -613,11 +607,15 @@ pub fn run_pipeline_internal(
                     );
                 }
             });
+            let discovery = channel_discovery::discover_and_profile(&parse_for_video);
             let result = video::run_video_export_pings(
+                &parse_for_video,
                 pings_for_video,
                 &vid_dir_clone,
                 on_progress,
                 &vid_options,
+                sidescan_pair,
+                Some(&discovery),
             );
             if let Some(ref h) = app_done {
                 let _ = h.emit(
@@ -952,12 +950,9 @@ fn run_soundtiles_inline(
     const TILE_HEIGHT: usize = 64;
     const TILE_STEP: usize = 16;
 
-    // Pick the first sidescan channel with the most pings
-    let mut ch_counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
-    for p in &parsed.pings {
-        *ch_counts.entry(p.channel).or_default() += 1;
-    }
-    let best_ch = ch_counts.into_iter().max_by_key(|(_, c)| *c).map(|(ch, _)| ch)?;
+    // Use the same data-driven sidescan pair as mosaic/KMZ (not raw ping count).
+    let (port_ch, star_ch) = outputs::find_sidescan_pair(parsed);
+    let best_ch = port_ch.or(star_ch)?;
 
     let channel_pings: Vec<&garmin_rsd_parser::Ping> = parsed
         .pings
@@ -1139,7 +1134,7 @@ fn serve_viewer(dir: String, state: tauri::State<'_, ViewerServerState>) -> Resu
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(feature = "video-gstreamer")]
+    // Detect and configure bundled GStreamer DLLs before anything else
     setup_bundled_gstreamer();
 
     tauri::Builder::default()

@@ -275,6 +275,15 @@ pub fn build_outputs(
     // KMZ, and viewer overlay writers that all need the same result.
     let sidescan_pair = find_sidescan_pair(parsed);
 
+    // Per-file channel discovery drives dynamic stitch orientation (nadir edge + role).
+    let needs_discovery = options.mosaic || options.kmz || options.web_viewer;
+    let discovery = if needs_discovery {
+        Some(crate::channel_discovery::discover_and_profile(parsed))
+    } else {
+        None
+    };
+    let discovery_ref = discovery.as_ref();
+
     if options.waterfall {
         emit_progress(progress, "Rendering Waterfall Image...", 65);
         artifacts.extend(write_waterfall_per_channel(
@@ -300,6 +309,7 @@ pub fn build_outputs(
             &options.channel_alignments,
             &denoised_cache,
             sidescan_pair,
+            discovery_ref,
         )?);
 
         // ALWAYS write the unified cartographic mosaic image to the root output folder so the user can just open the master file!
@@ -337,9 +347,7 @@ pub fn build_outputs(
         }
 
         // ── Bridge: use engine::build_mosaic (TVG + EGN + slant-range) ────────
-        // Replaces the old projection::project_pings_to_grid path which had no
-        // TVG, no histogram normalisation, and no blanking mitigation.
-        let discovery = crate::channel_discovery::discover_and_profile(parsed);
+        let discovery_for_engine = discovery_ref.expect("discovery when mosaic enabled");
         let nadir_mode_engine = match options.nadir_mode.as_str() {
             "fill" => crate::mosaic::engine::NadirMode::Fill,
             "raw" => crate::mosaic::engine::NadirMode::Raw,
@@ -359,7 +367,7 @@ pub fn build_outputs(
             output_dir: output_dir.clone(),
         };
         let (grid, engine_log) =
-            crate::mosaic::engine::build_mosaic(parsed, &discovery, &engine_config);
+            crate::mosaic::engine::build_mosaic(parsed, discovery_for_engine, &engine_config);
         for entry in &engine_log {
             eprintln!("[engine::build_mosaic] {entry}");
         }
@@ -451,6 +459,7 @@ pub fn build_outputs(
                 options.remove_water_column,
                 &options.channel_alignments,
                 sidescan_pair,
+                discovery_ref,
             ) {
                 Ok(has_overlay) => artifacts.push(OutputArtifact {
                     kind: "kmz".to_string(),
@@ -526,6 +535,7 @@ pub fn build_outputs(
             &options.channel_alignments,
             options.noaa_enc,
             sidescan_pair,
+            discovery_ref,
         ) {
             Ok(()) => artifacts.push(OutputArtifact {
                 kind: "viewer".to_string(),
@@ -1355,11 +1365,7 @@ fn segment_by_heading(
             }
         }
         segments.push((seg_start, split_at));
-        if split_at >= n {
-            break;
-        }
-        // Overlap by one ping so tile N trailing edge = tile N+1 leading edge.
-        seg_start = split_at.saturating_sub(1);
+        seg_start = split_at;
     }
     segments
 }
@@ -1718,38 +1724,22 @@ pub fn find_sidescan_pair(parsed: &ParseResult) -> (Option<u32>, Option<u32>) {
     }
 }
 
-/// Should a channel's samples be reversed (flipped)?
-/// Checks explicit alignment overrides first, then uses the assigned role
-/// from `find_sidescan_pair`.  The `assigned_as_port` flag indicates whether
-/// this channel was assigned the port role by the data-driven probe —
-/// this overrides the static channel map label which can be wrong on
-/// multi-compat UHD2 firmware.
+/// Should a channel's samples be reversed (flipped) for butterfly stitch?
+/// Delegates to the data-driven probe in `channel_discovery`.
 fn should_flip(
+    parsed: &ParseResult,
     ch_id: u32,
     alignments: &[crate::channel_alignment::ChannelAlignment],
     assigned_as_port: bool,
-    parser_reversed: bool,
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
 ) -> bool {
-    if let Some(a) = alignments.iter().find(|a| a.channel_id == ch_id) {
-        return a.flip;
-    }
-    // If the parser already reversed this channel (nadir normalisation),
-    // no additional flip is needed ? the data is already oriented correctly
-    // with nadir on the left (sample[0] = near-range).
-    if parser_reversed {
-        return false;
-    }
-    // UHD port data arrives pre-reversed from the transducer hardware,
-    // so flipping would double-reverse it.  All other port assignments need flip.
-    let gen = crate::garmin_rsd_parser::map_channel_info(ch_id)
-        .map(|(_, g)| g)
-        .unwrap_or("unknown");
-    if assigned_as_port {
-        // Port channel: flip unless UHD (pre-reversed)
-        gen != "uhd"
-    } else {
-        false
-    }
+    crate::channel_discovery::resolve_stitch_flip(
+        parsed,
+        ch_id,
+        assigned_as_port,
+        discovery,
+        alignments,
+    )
 }
 
 /// Should a channel's samples be inverted (negate brightness)?
@@ -1780,7 +1770,8 @@ fn render_stitched_overlay_strip(
     star_ch: Option<u32>,
     port_norm: Option<&PrecomputedNorm>,
     star_norm: Option<&PrecomputedNorm>,
-    reversed_channels: &[u32],
+    parsed: &ParseResult,
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
 ) -> RgbImage {
     let has_both = !port_pings.is_empty() && !star_pings.is_empty();
     let half_w = if has_both { seg_w / 2 } else { seg_w };
@@ -1851,8 +1842,8 @@ fn render_stitched_overlay_strip(
         (0.0, 1.0)
     };
 
-    let port_flip = port_ch.map_or(true, |ch| should_flip(ch, alignments, true, reversed_channels.contains(&ch)));
-    let star_flip = star_ch.map_or(false, |ch| should_flip(ch, alignments, false, reversed_channels.contains(&ch)));
+    let port_flip = port_ch.map_or(true, |ch| should_flip(parsed, ch, alignments, true, discovery));
+    let star_flip = star_ch.map_or(false, |ch| should_flip(parsed, ch, alignments, false, discovery));
     let port_invert = port_ch.map_or(false, |ch| should_invert(ch, alignments));
     let star_invert = star_ch.map_or(false, |ch| should_invert(ch, alignments));
 
@@ -2174,7 +2165,8 @@ fn render_sidescan_stitched(
     alignments: &[crate::channel_alignment::ChannelAlignment],
     port_ch: Option<u32>,
     star_ch: Option<u32>,
-    reversed_channels: &[u32],
+    parsed: &ParseResult,
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
 ) -> Option<RgbImage> {
     if port_pings.is_empty() && star_pings.is_empty() {
         return None;
@@ -2266,8 +2258,8 @@ fn render_sidescan_stitched(
     };
     let blend_px = (strip_half_w / 3).max(2);
 
-    let port_flip = port_ch.map_or(true, |ch| should_flip(ch, alignments, true, reversed_channels.contains(&ch)));
-    let star_flip = star_ch.map_or(false, |ch| should_flip(ch, alignments, false, reversed_channels.contains(&ch)));
+    let port_flip = port_ch.map_or(true, |ch| should_flip(parsed, ch, alignments, true, discovery));
+    let star_flip = star_ch.map_or(false, |ch| should_flip(parsed, ch, alignments, false, discovery));
 
     for dst_y in 0..img_h {
         // Per-channel y-mapping: each channel scales independently to the output
@@ -2556,12 +2548,6 @@ fn avg_heading(h1: f64, h2: f64) -> f64 {
     sx.atan2(cx)
 }
 
-/// Absolute angular difference between two headings (radians), 0..π.
-fn heading_diff(h1: f64, h2: f64) -> f64 {
-    let d = (h1 - h2).abs() % std::f64::consts::TAU;
-    if d > std::f64::consts::PI { std::f64::consts::TAU - d } else { d }.to_degrees()
-}
-
 /// Compute heading (radians) from ping a to ping b.
 /// Corrects for longitude convergence at latitude so heading is consistent
 /// with the perp_corners() metre-space projection.
@@ -2573,99 +2559,6 @@ fn heading_between(a: &Ping, b: &Ping) -> f64 {
     let delta_lat = b.latitude - a.latitude;
     let delta_lon = (b.longitude - a.longitude) * a.latitude.to_radians().cos();
     delta_lon.atan2(delta_lat)
-}
-
-/// Approximate metres between two lat/lon points (adequate for segment overlap scoring).
-fn geo_dist_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    let m_per_deg_lat = 111_320.0;
-    let m_per_deg_lon = 111_320.0 * lat1.to_radians().cos().max(0.01);
-    let dy = (lat2 - lat1) * m_per_deg_lat;
-    let dx = (lon2 - lon1) * m_per_deg_lon;
-    (dx * dx + dy * dy).sqrt()
-}
-
-/// Minimum distance from a point to a polyline defined by GPS pings.
-fn point_to_track_dist_m(lat: f64, lon: f64, pings: &[&Ping]) -> f64 {
-    if pings.is_empty() {
-        return f64::MAX;
-    }
-    if pings.len() == 1 {
-        let p = pings[0];
-        return geo_dist_m(lat, lon, p.latitude, p.longitude);
-    }
-    let mut best = f64::MAX;
-    for pair in pings.windows(2) {
-        let a = pair[0];
-        let b = pair[1];
-        let ax = a.latitude;
-        let ay = a.longitude;
-        let bx = b.latitude;
-        let by = b.longitude;
-        let dx = bx - ax;
-        let dy = by - ay;
-        let len_sq = dx * dx + dy * dy;
-        let t = if len_sq > 0.0 {
-            ((lat - ax) * dx + (lon - ay) * dy) / len_sq
-        } else {
-            0.0
-        }
-        .clamp(0.0, 1.0);
-        let px = ax + t * dx;
-        let py = ay + t * dy;
-        best = best.min(geo_dist_m(lat, lon, px, py));
-    }
-    best
-}
-
-fn quad_bbox(corners: &[(f64, f64); 4]) -> (f64, f64, f64, f64) {
-    let mut min_lon = f64::MAX;
-    let mut max_lon = f64::MIN;
-    let mut min_lat = f64::MAX;
-    let mut max_lat = f64::MIN;
-    for &(lon, lat) in corners {
-        min_lon = min_lon.min(lon);
-        max_lon = max_lon.max(lon);
-        min_lat = min_lat.min(lat);
-        max_lat = max_lat.max(lat);
-    }
-    (min_lon, min_lat, max_lon, max_lat)
-}
-
-fn quads_overlap(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> bool {
-    let (a_w, a_s, a_e, a_n) = quad_bbox(a);
-    let (b_w, b_s, b_e, b_n) = quad_bbox(b);
-    a_w <= b_e && a_e >= b_w && a_s <= b_n && a_n >= b_s
-}
-
-fn overlap_center(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> (f64, f64) {
-    let (a_w, a_s, a_e, a_n) = quad_bbox(a);
-    let (b_w, b_s, b_e, b_n) = quad_bbox(b);
-    let lon = ((a_w.max(b_w) + a_e.min(b_e)) * 0.5).clamp(-180.0, 180.0);
-    let lat = ((a_s.max(b_s) + a_n.min(b_n)) * 0.5).clamp(-90.0, 90.0);
-    (lat, lon)
-}
-
-/// Higher drawOrder = rendered on top in Google Earth. Segments whose track is
-/// closer to an overlap region beat segments from a crossing pass (spec item #3).
-fn compute_kmz_draw_orders(guide_segments: &[&[&Ping]], corners: &[[(f64, f64); 4]]) -> Vec<i32> {
-    let n = corners.len();
-    let mut orders = vec![0i32; n];
-    for i in 0..n {
-        let mut score = i as i32;
-        for j in 0..n {
-            if i == j || !quads_overlap(&corners[i], &corners[j]) {
-                continue;
-            }
-            let (lat, lon) = overlap_center(&corners[i], &corners[j]);
-            let d_i = point_to_track_dist_m(lat, lon, guide_segments[i]);
-            let d_j = point_to_track_dist_m(lat, lon, guide_segments[j]);
-            if d_i + 0.5 < d_j {
-                score += 1000;
-            }
-        }
-        orders[i] = score;
-    }
-    orders
 }
 
 /// Pre-compute shared boundary corners for a sequence of segments.
@@ -2685,40 +2578,23 @@ fn compute_shared_boundaries(
     let n = segments.len();
     let mut boundaries = Vec::with_capacity(n + 1);
 
-    // Helper: compute heading at a specific ping using its neighbors.
-    // Adaptive baseline: shorter in turns for tighter curve-following,
-    // longer on straight runs for stability.
+    // Helper: compute heading at a specific ping using its neighbors
     let local_heading = |seg: &[&Ping], end: bool| -> f64 {
         let len = seg.len();
         if len < 2 {
             return 0.0;
         }
-        // Start with a broad baseline for stability
-        let broad_span = (len / 4).clamp(10, 40);
-        // Also compute a tight baseline (3-5 pings) for turn detection
-        let tight_span = 3usize.min(len - 1);
-
-        let (broad_h, tight_h) = if end {
-            let ba = seg[len.saturating_sub(broad_span + 1)];
-            let bb = seg[len - 1];
-            let ta = seg[len.saturating_sub(tight_span + 1)];
-            let tb = seg[len - 1];
-            (heading_between(ba, bb), heading_between(ta, tb))
+        let span = (len / 4).clamp(10, 40);
+        if end {
+            // Heading at the end of the segment: use a broader baseline for stability
+            let a = seg[len.saturating_sub(span + 1)];
+            let b = seg[len - 1];
+            heading_between(a, b)
         } else {
-            let ba = seg[0];
-            let bb = seg[broad_span.min(len - 1)];
-            let ta = seg[0];
-            let tb = seg[tight_span.min(len - 1)];
-            (heading_between(ba, bb), heading_between(ta, tb))
-        };
-
-        // If broad and tight disagree by more than 5°, we're in a turn —
-        // use the tight (local) heading for accurate edge placement.
-        let diff = heading_diff(broad_h, tight_h);
-        if diff > 5.0 {
-            tight_h
-        } else {
-            broad_h
+            // Heading at the start of the segment: use a broader baseline for stability
+            let a = seg[0];
+            let b = seg[span.min(len - 1)];
+            heading_between(a, b)
         }
     };
 
@@ -2730,41 +2606,49 @@ fn compute_shared_boundaries(
             .clamp(10.0, 300.0)
     };
 
-    // Arc-aware boundaries: leading edge uses heading_start, trailing uses heading_end.
-    // boundaries[i] is shared by segment i-1 (trailing) and segment i (leading).
-    for i in 0..=n {
-        let (ping, heading, half_m) = if i == 0 {
-            let seg = segments[0];
-            (
-                seg.first().unwrap(),
-                local_heading(seg, false),
-                seg_half(0),
-            )
-        } else if i == n {
-            let seg = segments[n - 1];
-            (
-                seg.last().unwrap(),
-                local_heading(seg, true),
-                seg_half(n - 1),
-            )
-        } else {
-            // Junction ping (segments overlap by one ping from segment_by_heading).
-            let ping = segments[i].first().unwrap();
-            let h_end = local_heading(segments[i - 1], true);
-            let h_start = local_heading(segments[i], false);
-            (
-                ping,
-                avg_heading(h_end, h_start),
-                (seg_half(i - 1) + seg_half(i)) * 0.5,
-            )
-        };
-        boundaries.push(perp_corners(
-            ping.latitude,
-            ping.longitude,
-            heading,
-            half_m,
-        ));
+    // First boundary: first ping of first segment, heading at start
+    let first_ping = segments[0].first().unwrap();
+    let h_start = local_heading(segments[0], false);
+    boundaries.push(perp_corners(
+        first_ping.latitude,
+        first_ping.longitude,
+        h_start,
+        seg_half(0),
+    ));
+
+    // Interior boundaries: between segment i-1 and segment i
+    for i in 1..n {
+        let prev_last = segments[i - 1].last().unwrap();
+        let next_first = segments[i].first().unwrap();
+        let mid_lat = (prev_last.latitude + next_first.latitude) / 2.0;
+        let mid_lon = (prev_last.longitude + next_first.longitude) / 2.0;
+        // Use local headings at the boundary points (not overall segment heading)
+        let h_prev_end = local_heading(segments[i - 1], true);
+        let h_next_start = local_heading(segments[i], false);
+        let heading = avg_heading(h_prev_end, h_next_start);
+        let mut turn_delta = (h_next_start - h_prev_end).abs();
+        if turn_delta > std::f64::consts::PI {
+            turn_delta = 2.0 * std::f64::consts::PI - turn_delta;
+        }
+        // Tight turns can self-intersect with full swath; taper width at boundaries.
+        // Gentle tapering at turns prevents corner overlap without creating
+        // large gaps.  A 90° turn renders at ~65% width.
+        let turn_norm = (turn_delta / std::f64::consts::PI).clamp(0.0, 1.0);
+        let base_half = (seg_half(i - 1) + seg_half(i)) * 0.5;
+        // Stronger taper to prevent sharp corners crossing over in Google Earth & MapLibre
+        let local_half = base_half * (1.0 - 0.85 * turn_norm).clamp(0.15, 1.0);
+        boundaries.push(perp_corners(mid_lat, mid_lon, heading, local_half));
     }
+
+    // Last boundary: last ping of last segment, heading at end
+    let last_ping = segments[n - 1].last().unwrap();
+    let h_end = local_heading(segments[n - 1], true);
+    boundaries.push(perp_corners(
+        last_ping.latitude,
+        last_ping.longitude,
+        h_end,
+        seg_half(n - 1),
+    ));
 
     boundaries
 }
@@ -3186,6 +3070,83 @@ fn write_waterfall_per_channel(
     Ok(arts)
 }
 
+/// Build the enhanced stitched butterfly mosaic (same pipeline as `mosaic_combined.png`).
+/// Uses EGN, empirical TVG, nadir seam blend, and data-driven port/star orientation.
+pub fn build_stitched_mosaic_rgb(
+    parsed: &ParseResult,
+    colormap: &str,
+    remove_water_column: bool,
+    nadir_mode: &str,
+    alignments: &[crate::channel_alignment::ChannelAlignment],
+    sidescan_pair: (Option<u32>, Option<u32>),
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
+) -> Option<RgbImage> {
+    let channels = pings_by_channel(parsed);
+    let (pk, sk) = sidescan_pair;
+    let (pk, sk) = (pk?, sk?);
+    let port_pings = channels.get(&pk)?;
+    let star_pings = channels.get(&sk)?;
+    let p_n = port_pings.len();
+    let s_n = star_pings.len();
+    let min_n = p_n.min(s_n);
+    let max_n = p_n.max(s_n).max(1);
+    if min_n < 200 || (min_n as f64 / max_n as f64) < 0.12 {
+        return None;
+    }
+
+    let port_lbl = channel_label(parsed, pk);
+    let star_lbl = channel_label(parsed, sk);
+    let port_role = egn_role_from_label(&port_lbl, pk);
+    let star_role = egn_role_from_label(&star_lbl, sk);
+    let port_egn = apply_egn_to_channel_pings(port_pings, port_role);
+    let star_egn = apply_egn_to_channel_pings(star_pings, star_role);
+    let port_refs: Vec<&Ping> = port_egn.iter().collect();
+    let star_refs: Vec<&Ping> = star_egn.iter().collect();
+
+    let down_ch = if nadir_mode == "fill" {
+        channels
+            .keys()
+            .copied()
+            .filter(|&ch| ch != pk && ch != sk)
+            .filter(|&ch| channel_label(parsed, ch).contains("downscan"))
+            .max_by_key(|&ch| channels.get(&ch).map(|v| v.len()).unwrap_or(0))
+    } else {
+        None
+    };
+    let empty_pings: Vec<&Ping> = Vec::new();
+    let down_pings = down_ch
+        .and_then(|dc| channels.get(&dc))
+        .unwrap_or(&empty_pings);
+
+    let port_max_w = port_refs
+        .iter()
+        .map(|p| p.samples.len() as u32)
+        .max()
+        .unwrap_or(512);
+    let star_max_w = star_refs
+        .iter()
+        .map(|p| p.samples.len() as u32)
+        .max()
+        .unwrap_or(512);
+    let dynamic_w = port_max_w.max(star_max_w).min(WATERFALL_MAX_W / 2);
+
+    render_sidescan_stitched(
+        &port_refs,
+        &star_refs,
+        down_pings,
+        dynamic_w,
+        WATERFALL_MAX_H,
+        colormap,
+        remove_water_column,
+        nadir_mode != "raw",
+        alignments,
+        Some(pk),
+        Some(sk),
+        parsed,
+        discovery,
+    )
+}
+
 fn write_mosaic_per_channel(
     parsed: &ParseResult,
     output_dir: &Path,
@@ -3197,6 +3158,7 @@ fn write_mosaic_per_channel(
     alignments: &[crate::channel_alignment::ChannelAlignment],
     denoised_cache: &BTreeMap<u32, GrayImage>,
     sidescan_pair: (Option<u32>, Option<u32>),
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
 ) -> Result<Vec<OutputArtifact>> {
     let channels = pings_by_channel(parsed);
     let mut arts = Vec::new();
@@ -3257,10 +3219,8 @@ fn write_mosaic_per_channel(
     // Stitched butterfly mosaic: use pre-computed channel pair (coverage + overlap).
     let (port_key, star_key) = sidescan_pair;
     if let (Some(pk), Some(sk)) = (port_key, star_key) {
-        let port_pings = &channels[&pk];
-        let star_pings = &channels[&sk];
-        let p_n = port_pings.len();
-        let s_n = star_pings.len();
+        let p_n = channels.get(&pk).map(|v| v.len()).unwrap_or(0);
+        let s_n = channels.get(&sk).map(|v| v.len()).unwrap_or(0);
         let min_n = p_n.min(s_n);
         let max_n = p_n.max(s_n).max(1);
         if min_n < 200 || (min_n as f64 / max_n as f64) < 0.12 {
@@ -3275,65 +3235,17 @@ fn write_mosaic_per_channel(
             return Ok(arts);
         }
 
-        // Apply EGN to port and star channels independently.
-        // GT51 asymmetric wings get a diagonal-slope correction;
-        // UHD paired channels get V-shaped correction.
-        let port_lbl = channel_label(parsed, pk);
-        let star_lbl = channel_label(parsed, sk);
-        let port_role = egn_role_from_label(&port_lbl, pk);
-        let star_role = egn_role_from_label(&star_lbl, sk);
-        let port_egn: Vec<Ping> = apply_egn_to_channel_pings(port_pings, port_role);
-        let star_egn: Vec<Ping> = apply_egn_to_channel_pings(star_pings, star_role);
-        let port_pings: Vec<&Ping> = port_egn.iter().collect();
-        let star_pings: Vec<&Ping> = star_egn.iter().collect();
-
-        // Data-driven downscan channel lookup: any channel labeled chirp_downscan
-        // that is NOT one of the selected sidescan arms, with the most pings.
-        // Handles classic (ch2), UHD (ch6), UHD2 8-series (ch10), UHD2 10-series (ch12),
-        // ClearVü dual-freq (ch18/20), and any future layouts automatically.
-        // Only resolve the downscan channel when the user requested fill mode.
-        let down_ch = if nadir_mode == "fill" {
-            channels
-                .keys()
-                .copied()
-                .filter(|&ch| ch != pk && ch != sk)
-                .filter(|&ch| channel_label(parsed, ch).contains("downscan"))
-                .max_by_key(|&ch| channels.get(&ch).map(|v| v.len()).unwrap_or(0))
-        } else {
-            None
-        };
-        let empty_pings: Vec<&Ping> = Vec::new();
-        let down_pings = down_ch
-            .and_then(|dc| channels.get(&dc))
-            .unwrap_or(&empty_pings);
-        // Use the actual maximum sample count per side so far-range data isn't resampled away
-        let port_max_w = port_pings
-            .iter()
-            .map(|p| p.samples.len() as u32)
-            .max()
-            .unwrap_or(512);
-        let star_max_w = star_pings
-            .iter()
-            .map(|p| p.samples.len() as u32)
-            .max()
-            .unwrap_or(512);
-        let dynamic_w = port_max_w.max(star_max_w).min(WATERFALL_MAX_W / 2);
-        if let Some(combined) = render_sidescan_stitched(
-            &port_pings,
-            &star_pings,
-            down_pings,
-            dynamic_w,
-            WATERFALL_MAX_H,
+        if let Some(combined) = build_stitched_mosaic_rgb(
+            parsed,
             colormap,
             remove_water_column,
-            nadir_mode != "raw",
+            nadir_mode,
             alignments,
-            Some(pk),
-            Some(sk),
-            &parsed.reversed_channels,
+            sidescan_pair,
+            discovery,
         ) {
             let nadir_desc = match nadir_mode {
-                "fill" if !down_pings.is_empty() => " + downscan nadir fill",
+                "fill" => " + downscan nadir fill",
                 "raw" => " (nadir gap preserved)",
                 _ => "",
             };
@@ -3577,7 +3489,6 @@ fn write_mbtiles(
 
                 let mut tile: image::RgbaImage =
                     ImageBuffer::from_pixel(256, 256, Rgba([0u8, 0, 0, 0]));
-                let mut tile_quality = [[f64::MAX; 256]; 256];
                 let mut has_data = false;
 
                 for (pi, ping) in gps_pings.iter().enumerate() {
@@ -3599,28 +3510,40 @@ fn write_mbtiles(
                     let cx = (ping.longitude - tile_west) / (tile_east - tile_west) * 256.0;
                     let cy = (tile_north - ping.latitude) / (tile_north - tile_south) * 256.0;
 
+                    // Along-track direction in pixel space (for brush coverage)
+                    let along_sin = heading.sin();
+                    let along_cos = heading.cos();
+                    let along_px_x = along_sin * (m_per_deg_lon / m_per_px.max(0.001)) * 0.0000001;
+                    let along_px_y = -along_cos * (m_per_deg_lat / m_per_px.max(0.001)) * 0.0000001;
+
                     let row = &ping_rows[pi];
                     for (si, &g) in row.iter().enumerate() {
                         if g == 0 {
                             continue;
                         }
-                        let cross_track_m =
-                            (si as f64 - swath_px as f64 / 2.0).abs() * m_per_sample;
-                        let px = cx + (si as f64 - swath_px as f64 / 2.0) * m_per_sample * sin_p / m_per_px;
-                        let py = cy - (si as f64 - swath_px as f64 / 2.0) * m_per_sample * cos_p / m_per_px;
+                        let dist_from_center = (si as f64 - swath_px as f64 / 2.0) * m_per_sample;
+                        let px = cx + dist_from_center * sin_p / m_per_px;
+                        let py = cy - dist_from_center * cos_p / m_per_px;
 
                         let rgb = apply_colormap(g as f32 / 255.0, colormap);
                         let pixel = Rgba([rgb[0], rgb[1], rgb[2], 255]);
 
-                        let bx = px.round() as i32;
-                        let by = py.round() as i32;
-                        if bx >= 0 && bx < 256 && by >= 0 && by < 256 {
-                            // Nadir-priority: closer to track center wins at crossings.
-                            let existing = tile.get_pixel(bx as u32, by as u32);
-                            let existing_dist = tile_quality[by as usize][bx as usize];
-                            if existing[3] == 0 || cross_track_m < existing_dist {
-                                tile.put_pixel(bx as u32, by as u32, pixel);
-                                tile_quality[by as usize][bx as usize] = cross_track_m;
+                        // Paint a small 2×1 brush to reduce gaps between pings.
+                        // Brush extends 1px in the along-track direction.
+                        for ofs in 0..2i32 {
+                            let bx = (px + along_px_x * ofs as f64).round() as i32;
+                            let by = (py + along_px_y * ofs as f64).round() as i32;
+                            if bx >= 0 && bx < 256 && by >= 0 && by < 256 {
+                                // Max-compositing: brighter pixel wins
+                                let existing = tile.get_pixel(bx as u32, by as u32);
+                                if existing[3] == 0
+                                    || g > ((existing[0] as u16
+                                        + existing[1] as u16
+                                        + existing[2] as u16)
+                                        / 3) as u8
+                                {
+                                    tile.put_pixel(bx as u32, by as u32, pixel);
+                                }
                                 has_data = true;
                             }
                         }
@@ -3802,6 +3725,7 @@ fn write_kmz(
     remove_water_column: bool,
     alignments: &[crate::channel_alignment::ChannelAlignment],
     sidescan_pair: (Option<u32>, Option<u32>),
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
 ) -> Result<bool> {
     let kml_str = fs::read_to_string(kml_path)
         .with_context(|| format!("Failed to read KML for KMZ: {}", kml_path.display()))?;
@@ -3855,7 +3779,8 @@ fn write_kmz(
     // KMZ: allow segments as small as 12 pings through turns for tighter
     // curve-following with gx:LatLonQuad overlays.
     let (raw_base, seg_heading_thr) = adaptive_segmentation_params(guide_pings);
-    let seg_base = raw_base.clamp(80, 400);
+    // Short segments through turns keep gx:LatLonQuad overlays planar in Google Earth.
+    let seg_base = raw_base.clamp(12, 48);
     let seg_ranges = segment_by_heading(guide_pings, seg_base, seg_heading_thr);
     let guide_segments: Vec<&[&Ping]> = seg_ranges
         .iter()
@@ -3875,10 +3800,8 @@ fn write_kmz(
         strip: image::RgbImage,
         corners: [(f64, f64); 4],
         idx: usize,
-        draw_order: i32,
     }
     let mut segments: Vec<KmzSegment> = Vec::new();
-    let mut segment_guides: Vec<Vec<&Ping>> = Vec::new();
 
     // Build a mapping from guide-segment index ranges to the other channel's pings
     // by matching on timestamp proximity
@@ -3977,31 +3900,19 @@ fn write_kmz(
             star_ch,
             global_port_norm.as_ref(),
             global_star_norm.as_ref(),
-            &parsed.reversed_channels,
+            parsed,
+            discovery,
         );
 
         segments.push(KmzSegment {
             strip,
             corners,
             idx: seg_idx,
-            draw_order: 0,
         });
-        segment_guides.push(seg_guide.iter().copied().collect());
     }
 
     if segments.is_empty() {
         return Ok(false);
-    }
-
-    let draw_orders = compute_kmz_draw_orders(
-        &segment_guides
-            .iter()
-            .map(|g| g.as_slice())
-            .collect::<Vec<_>>(),
-        &segments.iter().map(|s| s.corners).collect::<Vec<_>>(),
-    );
-    for (seg, order) in segments.iter_mut().zip(draw_orders) {
-        seg.draw_order = order;
     }
 
     // Along-track registration: satellite-style NCC on overlap bands between strips.
@@ -4037,7 +3948,7 @@ fn write_kmz(
                 \n    </gx:LatLonQuad>\
                 \n  </GroundOverlay>",
                 seg.idx,
-                seg.draw_order,
+                seg.idx + 1,
                 png_name,
                 seg.corners[0].0,
                 seg.corners[0].1,
@@ -4064,7 +3975,7 @@ fn write_kmz(
                 \n    </gx:LatLonQuad>\
                 \n  </GroundOverlay>",
                 seg.idx,
-                seg.draw_order,
+                seg.idx + 1,
                 webp_name,
                 seg.corners[0].0,
                 seg.corners[0].1,
@@ -4255,6 +4166,7 @@ fn write_native_viewer(
     alignments: &[crate::channel_alignment::ChannelAlignment],
     enable_nautical_charts: bool,
     sidescan_pair: (Option<u32>, Option<u32>),
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
 ) -> Result<()> {
     fs::create_dir_all(viewer_dir)
         .with_context(|| format!("Failed to create viewer dir: {}", viewer_dir.display()))?;
@@ -4366,6 +4278,7 @@ fn write_native_viewer(
         remove_water_column,
         alignments,
         sidescan_pair,
+        discovery,
     )?;
     let overlays_json_str = serde_json::to_string(&sonar_overlays)?;
 
@@ -4788,6 +4701,7 @@ fn generate_viewer_sonar_overlays(
     remove_water_column: bool,
     alignments: &[crate::channel_alignment::ChannelAlignment],
     sidescan_pair: (Option<u32>, Option<u32>),
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
 ) -> Result<Vec<serde_json::Value>> {
     // Use pre-computed port + starboard sidescan channel pair
     let (port_ch, star_ch) = sidescan_pair;
@@ -4832,11 +4746,10 @@ fn generate_viewer_sonar_overlays(
         return Ok(vec![]);
     }
 
-    // Viewer overlays: use larger segments (floor=200 pings) to keep the total
-    // number of image sources manageable for MapLibre's WebGL renderer.
-    // 40K pings / 200 = ~200 overlays (vs 800+ with floor=50).
+    // Viewer overlays: moderate segment length — long segments ribbon on curves and
+    // leave visible gaps; cap overlay count for MapLibre WebGL limits.
     let (raw_base, seg_heading_thr) = adaptive_segmentation_params(guide_pings);
-    let seg_base = raw_base.max(200);
+    let seg_base = raw_base.clamp(40, 100);
     let seg_ranges = segment_by_heading(guide_pings, seg_base, seg_heading_thr);
     let guide_segments: Vec<&[&Ping]> = seg_ranges
         .iter()
@@ -4938,7 +4851,8 @@ fn generate_viewer_sonar_overlays(
             star_ch,
             global_port_norm_v.as_ref(),
             global_star_norm_v.as_ref(),
-            &parsed.reversed_channels,
+            parsed,
+            discovery,
         );
 
         segments.push(ViewerSegment {

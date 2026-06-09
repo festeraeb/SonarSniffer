@@ -1239,31 +1239,7 @@ fn correlate_port_starboard(
     let candidates: Vec<&ChannelProfile> = profiles
         .iter()
         .filter(|p| {
-            // Must be classified as SideVü with sufficient pings.
-            if p.archetype != SignalArchetype::SideVu || p.ping_count < MIN_PINGS_FOR_CLASSIFY {
-                return false;
-            }
-            // HARD EXCLUSION: known downscan and depth/temp channel IDs are NEVER
-            // valid sidescan pairing candidates, regardless of what the archetype
-            // classifier decided. The channel ID is the strongest signal — Garmin
-            // does not reuse these IDs for sidescan across any firmware generation.
-            match p.channel_id {
-                2 | 6 | 10 | 12 | 16 | 18 | 20 | 993 | 1487 => {
-                    log.push(format!(
-                        "  Port/Star: excluding ch{} (known downscan ID) from pairing",
-                        p.channel_id
-                    ));
-                    false
-                }
-                7 | 11 | 13 | 17 => {
-                    log.push(format!(
-                        "  Port/Star: excluding ch{} (depth/temp ID) from pairing",
-                        p.channel_id
-                    ));
-                    false
-                }
-                _ => true,
-            }
+            p.archetype == SignalArchetype::SideVu && p.ping_count >= MIN_PINGS_FOR_CLASSIFY
         })
         .collect();
 
@@ -1745,6 +1721,131 @@ impl DiscoveryResult {
 
         parts.join(" | ")
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §13b  BUTTERFLY STITCH ORIENTATION (dynamic per-file probe)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Probe where the nadir zone sits on **post-parse** samples for one channel.
+pub fn probe_nadir_edge_for_channel(parsed: &ParseResult, ch_id: u32) -> NadirEdge {
+    let mut pings: Vec<&Ping> = parsed
+        .pings
+        .iter()
+        .filter(|p| p.channel == ch_id && p.samples.len() >= 32)
+        .collect();
+    if pings.is_empty() {
+        return NadirEdge::Unknown;
+    }
+    if pings.len() > PROFILE_WINDOW {
+        let step = pings.len() / PROFILE_WINDOW;
+        pings = pings
+            .iter()
+            .step_by(step.max(1))
+            .take(PROFILE_WINDOW)
+            .copied()
+            .collect();
+    }
+    classify_nadir_edge_sliding(&pings).0
+}
+
+/// Whether butterfly/KMZ stitch should reverse this channel's samples.
+///
+/// Uses, in order: user alignment overrides → discovery profile (nadir edge +
+/// spatial role) → live sliding-window probe on parsed pings.
+pub fn resolve_stitch_flip(
+    parsed: &ParseResult,
+    ch_id: u32,
+    assigned_as_port: bool,
+    discovery: Option<&DiscoveryResult>,
+    alignments: &[crate::channel_alignment::ChannelAlignment],
+) -> bool {
+    if let Some(a) = alignments.iter().find(|a| a.channel_id == ch_id) {
+        return a.flip;
+    }
+
+    let profile = discovery.and_then(|d| d.profile(ch_id));
+    let nadir_edge = profile
+        .map(|p| p.nadir_edge)
+        .filter(|e| *e != NadirEdge::Unknown)
+        .unwrap_or_else(|| probe_nadir_edge_for_channel(parsed, ch_id));
+
+    let is_port_half = profile
+        .map(|p| {
+            matches!(
+                p.spatial_role,
+                SpatialRole::Port | SpatialRole::SingleSidePort
+            )
+        })
+        .unwrap_or(assigned_as_port);
+
+    let flip = stitch_flip_for_half(is_port_half, nadir_edge, parsed, ch_id);
+
+    eprintln!(
+        "[stitch-flip] ch{} role={} nadir={:?} parser_rev={} → flip={}",
+        ch_id,
+        if is_port_half { "port" } else { "star" },
+        nadir_edge,
+        parsed.reversed_channels.contains(&ch_id),
+        flip
+    );
+    flip
+}
+
+/// Map nadir position + wing role to a mirror decision for butterfly layout.
+fn stitch_flip_for_half(is_port_half: bool, nadir_edge: NadirEdge, parsed: &ParseResult, ch_id: u32) -> bool {
+    match nadir_edge {
+        // Near-range at sample[0]: port mirrors, starboard does not.
+        NadirEdge::Left => is_port_half,
+        // Near-range at sample[max]: starboard mirrors, port does not.
+        NadirEdge::Right => !is_port_half,
+        // Centre-beam / paired internal gap — leave sample order as-is.
+        NadirEdge::Center => false,
+        NadirEdge::Unknown => stitch_flip_gradient_vote(parsed, ch_id, is_port_half),
+    }
+}
+
+/// Last-resort vote: count pings whose water-column gap is closer to start vs end.
+fn stitch_flip_gradient_vote(parsed: &ParseResult, ch_id: u32, is_port_half: bool) -> bool {
+    let pings: Vec<&Ping> = parsed
+        .pings
+        .iter()
+        .filter(|p| p.channel == ch_id && p.samples.len() >= 32)
+        .take(80)
+        .collect();
+    if pings.is_empty() {
+        return is_port_half;
+    }
+
+    let mut left_votes = 0i32;
+    let mut right_votes = 0i32;
+
+    for p in &pings {
+        let n = p.samples.len();
+        let mut sorted = p.samples.clone();
+        sorted.sort_unstable();
+        let p15 = sorted[(n * 15 / 100).min(n - 1)] as f32;
+        let p90 = sorted[(n * 90 / 100).min(n - 1)] as f32;
+        let threshold = (p15 + (p90 - p15).max(1.0) * 0.20) as u16;
+
+        let left_gap = p.samples.iter().take(n / 3).filter(|&&s| s <= threshold).count();
+        let right_gap = p.samples.iter().skip(n * 2 / 3).filter(|&&s| s <= threshold).count();
+
+        if left_gap > right_gap + 4 {
+            left_votes += 1;
+        } else if right_gap > left_gap + 4 {
+            right_votes += 1;
+        }
+    }
+
+    let edge = if left_votes > right_votes {
+        NadirEdge::Left
+    } else if right_votes > left_votes {
+        NadirEdge::Right
+    } else {
+        return is_port_half;
+    };
+    stitch_flip_for_half(is_port_half, edge, parsed, ch_id)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "sonarsniffer"
-version = "0.8.0"
+version = "0.8.6"
 description = "SonarSniffer by NautiDog — Professional Marine Survey Analysis"
 authors = ["NautiDog Sailing"]
 edition = "2021"
@@ -72,12 +72,3 @@ default = []
 video-gstreamer = ["dep:gstreamer", "dep:gstreamer-app"]
 soundtiles = ["dep:opencv"]
 full-license = []
-
-# Tauri desktop app (separate binary, only for release builds)
-# Build with: cargo tauri build
-# [dependencies.tauri]
-# version = "2"
-# [dependencies.tauri-plugin-opener]
-# version = "2"
-# [dependencies.rfd]
-# version = "0.15"
