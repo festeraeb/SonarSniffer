@@ -9,7 +9,6 @@ param(
 $ErrorActionPreference = "Stop"
 $targetDir = Join-Path $env:LOCALAPPDATA "SonarSniffer-build\target"
 $env:CARGO_TARGET_DIR = $targetDir
-$profile = if ($Release) { "release" } else { "dev" }
 
 function Invoke-Cargo {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
@@ -51,7 +50,7 @@ try {
         }
 
         Write-Host "[5/5] Stage Tauri sidecars..." -ForegroundColor Yellow
-        & (Join-Path $PSScriptRoot "stage_tauri_sidecars.ps1") -RepoRoot $RepoRoot -Profile $(if ($Release) { "release" } else { "dev" })
+        & (Join-Path $PSScriptRoot "stage_tauri_sidecars.ps1") -RepoRoot $RepoRoot -BuildProfile $(if ($Release) { "release" } else { "dev" })
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } else {
         Write-Host "[4/5] Skipped desktop (--SkipDesktop)" -ForegroundColor DarkGray

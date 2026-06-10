@@ -1,11 +1,17 @@
 # Stage CLI sidecars for Tauri bundling (Windows).
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
-    [string]$Profile = "release"
+    [string]$BuildProfile = "release"
 )
 
 $ErrorActionPreference = "Stop"
-$targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $env:LOCALAPPDATA "SonarSniffer-build\target" }
+$targetDir = if ($env:CARGO_TARGET_DIR) {
+    $env:CARGO_TARGET_DIR
+} elseif ($env:GITHUB_ACTIONS -eq "true") {
+    Join-Path $RepoRoot "target"
+} else {
+    Join-Path $env:LOCALAPPDATA "SonarSniffer-build\target"
+}
 $env:CARGO_TARGET_DIR = $targetDir
 
 function Invoke-CargoBuild {
@@ -20,8 +26,8 @@ function Invoke-CargoBuild {
 
 Push-Location $RepoRoot
 try {
-    Write-Host "Building CLI sidecars..."
-    if ($Profile -eq "release") {
+    Write-Host "Building CLI sidecars ($BuildProfile) -> $targetDir"
+    if ($BuildProfile -eq "release") {
         Invoke-CargoBuild build --release --no-default-features --bin sonarsniffer-cli --bin parse_cli
     } else {
         Invoke-CargoBuild build --no-default-features --bin sonarsniffer-cli --bin parse_cli
@@ -31,7 +37,7 @@ try {
     New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
     $suffix = if ($IsWindows -or $env:OS -match "Windows") { ".exe" } else { "" }
-    $outProfile = if ($Profile -eq "release") { "release" } else { "debug" }
+    $outProfile = if ($BuildProfile -eq "release") { "release" } else { "debug" }
     $cliSrc = Join-Path $targetDir "$outProfile\sonarsniffer-cli$suffix"
     $parseSrc = Join-Path $targetDir "$outProfile\parse_cli$suffix"
 
@@ -46,7 +52,6 @@ try {
         Write-Host "  staged $($pair.Dst)"
     }
 
-    # soundtiles is optional; stage if built
     $tilesSrc = Join-Path $targetDir "$outProfile\soundtiles$suffix"
     if (Test-Path $tilesSrc) {
         Copy-Item -Force $tilesSrc (Join-Path $binDir "soundtiles$suffix")

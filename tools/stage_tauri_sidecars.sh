@@ -4,6 +4,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE="${1:-release}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${GITHUB_ACTIONS:+${REPO_ROOT}/target}}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.sonarsniffer-build/target}"
 
 cd "$REPO_ROOT"
