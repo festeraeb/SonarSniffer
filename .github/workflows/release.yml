@@ -122,7 +122,11 @@ jobs:
       - name: Collect DMG
         run: |
           mkdir dist-dmg
-          cp desktop/src-tauri/target/release/bundle/dmg/*.dmg dist-dmg/ || true
+          if [ -d target/release/bundle/dmg ]; then
+            cp target/release/bundle/dmg/*.dmg dist-dmg/ || true
+          elif [ -d desktop/src-tauri/target/release/bundle/dmg ]; then
+            cp desktop/src-tauri/target/release/bundle/dmg/*.dmg dist-dmg/ || true
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: sonarsniffer-macos-dmg
