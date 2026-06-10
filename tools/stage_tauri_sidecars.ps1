@@ -28,11 +28,11 @@ Push-Location $RepoRoot
 try {
     Write-Host "Building CLI sidecars ($BuildProfile) -> $targetDir"
     if ($BuildProfile -eq "release") {
-        Invoke-CargoBuild build --release --no-default-features --bin sonarsniffer-cli --bin parse_cli
-        Invoke-CargoBuild build --release -p soundtiles --bin soundtiles
+        Invoke-CargoBuild @('build', '--release', '--no-default-features', '--bin', 'sonarsniffer-cli', '--bin', 'parse_cli')
+        Invoke-CargoBuild @('build', '--release', '-p', 'soundtiles', '--bin', 'soundtiles')
     } else {
-        Invoke-CargoBuild build --no-default-features --bin sonarsniffer-cli --bin parse_cli
-        Invoke-CargoBuild build -p soundtiles --bin soundtiles
+        Invoke-CargoBuild @('build', '--no-default-features', '--bin', 'sonarsniffer-cli', '--bin', 'parse_cli')
+        Invoke-CargoBuild @('build', '-p', 'soundtiles', '--bin', 'soundtiles')
     }
 
     $binDir = Join-Path $RepoRoot "desktop\src-tauri\binaries"
