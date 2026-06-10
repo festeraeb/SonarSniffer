@@ -13,6 +13,8 @@ pub mod channel_discovery;
 pub mod probing;
 pub mod egn;
 pub mod adaptive_tvg;
+pub mod export_presets;
+pub mod multi_mosaic;
 pub mod outputs;
 pub mod overlay_align;
 pub mod mosaic;
@@ -33,4 +35,9 @@ mod video_enhanced;
 mod mp4_av1;
 mod corpus_scan;
 pub mod deps;
+pub mod host_profile;
 mod static_server;
+
+#[cfg(all(not(debug_assertions), target_os = "linux", feature = "jemalloc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;

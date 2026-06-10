@@ -12,6 +12,8 @@ const state = {
   unlistenProgress: null,
   unlistenVideo: null,
   unlistenVideoComplete: null,
+  suggested: null,
+  suggestedOptions: null,
 };
 
 function setText(id, value) {
@@ -243,7 +245,10 @@ async function activateLicense() {
 async function browseInput(targetId) {
   try {
     const result = await invoke("pick_input_file");
-    if (result) document.getElementById(targetId).value = result;
+    if (result) {
+      document.getElementById(targetId).value = result;
+      await refreshSuggestedSettings();
+    }
   } catch (error) {
     setConsole("pipelineOutput", `Browse failed: ${error}`);
   }
@@ -252,28 +257,101 @@ async function browseInput(targetId) {
 async function browseFolder() {
   try {
     const result = await invoke("pick_folder");
-    if (result) document.getElementById("outputFolder").value = result;
+    if (result) {
+      document.getElementById("outputFolder").value = result;
+      await refreshSuggestedSettings();
+    }
   } catch (error) {
     setConsole("pipelineOutput", `Folder browse failed: ${error}`);
   }
 }
 
+function hideSuggestedBanner() {
+  document.getElementById("suggestedSettingsBanner")?.classList.add("hidden");
+}
+
+async function refreshSuggestedSettings() {
+  if (!invoke) return;
+  const fileName = document.getElementById("pipelineInput")?.value?.trim();
+  const outputDir = document.getElementById("outputFolder")?.value?.trim();
+  if (!fileName && !outputDir) {
+    hideSuggestedBanner();
+    return;
+  }
+  try {
+    const suggested = await invoke("get_suggested_settings", {
+      fileName: fileName || null,
+      outputDir: outputDir || null,
+      tier: "auto",
+    });
+    state.suggested = suggested;
+    const banner = document.getElementById("suggestedSettingsBanner");
+    const label = document.getElementById("suggestedTierLabel");
+    const notes = document.getElementById("suggestedNotes");
+    if (!banner || !label || !notes) return;
+    const host = suggested.host || {};
+    const resolved = suggested.resolvedTier || "auto";
+    label.textContent = `Suggested: ${resolved} tier (${host.logicalCores || "?"} cores, ${(host.totalRamGb || 0).toFixed(0)} GB RAM)`;
+    notes.textContent = (suggested.notes || []).join(" ");
+    banner.classList.remove("hidden");
+  } catch (error) {
+    hideSuggestedBanner();
+  }
+}
+
+function applySuggestedSettings() {
+  const suggested = state.suggested;
+  if (!suggested?.options) return;
+  const o = suggested.options;
+  const v = document.getElementById("enableVideo");
+  const m = document.getElementById("enableMosaic");
+  const c = document.getElementById("enableCurvelet");
+  if (v) v.checked = Boolean(o.video);
+  if (m) m.checked = Boolean(o.mosaic);
+  if (c) c.checked = Boolean(o.curveletDenoise);
+  state.suggestedOptions = { ...o };
+  hideSuggestedBanner();
+  setConsole("pipelineOutput", `Applied ${suggested.resolvedTier || "suggested"} settings.`);
+}
+
 function buildPipelineOptions(outDir, stitchLayoutId = null) {
   const selectedMap = document.querySelector(".swatch.selected")?.dataset?.map || "amber";
+  const preset = document.getElementById("exportPreset")?.value || "";
+  const base = state.suggestedOptions
+    ? { ...state.suggestedOptions }
+    : {
+        video: Boolean(document.getElementById("enableVideo")?.checked),
+        mosaic: Boolean(document.getElementById("enableMosaic")?.checked),
+        curveletDenoise: Boolean(document.getElementById("enableCurvelet")?.checked),
+        waterfall: true,
+        kml: true,
+        kmz: true,
+        mbtiles: true,
+        arcgis: true,
+        webViewer: true,
+        perWingTvg: true,
+      };
   const opts = {
+    ...base,
     outputDir: outDir,
-    video: Boolean(document.getElementById("enableVideo")?.checked),
-    mosaic: Boolean(document.getElementById("enableMosaic")?.checked),
-    curveletDenoise: Boolean(document.getElementById("enableCurvelet")?.checked),
     colormap: selectedMap,
     videoSpeedMode: document.getElementById("videoSpeedMode")?.value || "readable",
-    waterfall: true,
-    kml: true,
-    kmz: true,
-    mbtiles: true,
-    arcgis: true,
-    webViewer: true,
+    overlayDepth: Boolean(document.getElementById("overlayDepth")?.checked),
+    overlaySpeed: Boolean(document.getElementById("overlaySpeed")?.checked),
+    overlayGps: Boolean(document.getElementById("overlayGps")?.checked),
   };
+  if (preset) opts.exportPreset = preset;
+  if (document.getElementById("enableDetection")?.checked) {
+    opts.detectionMode = "basic";
+  }
+  const alignments = [];
+  if (document.getElementById("flipPortWing")?.checked) {
+    alignments.push({ channelId: 4, flip: true, invert: false });
+  }
+  if (document.getElementById("flipStarWing")?.checked) {
+    alignments.push({ channelId: 5, flip: true, invert: false });
+  }
+  if (alignments.length) opts.channelAlignments = alignments;
   if (stitchLayoutId) opts.stitchLayoutId = stitchLayoutId;
   return opts;
 }
@@ -385,6 +463,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("browseFolderBtn")?.addEventListener("click", browseFolder);
   document.getElementById("runPipelineBtn")?.addEventListener("click", () => runPipeline());
   document.getElementById("confirmLayoutBtn")?.addEventListener("click", confirmLayoutAndRun);
+  document.getElementById("applySuggestedBtn")?.addEventListener("click", applySuggestedSettings);
+  document.getElementById("dismissSuggestedBtn")?.addEventListener("click", hideSuggestedBanner);
+  document.getElementById("pipelineInput")?.addEventListener("change", () => refreshSuggestedSettings());
+  document.getElementById("outputFolder")?.addEventListener("change", () => refreshSuggestedSettings());
 
   document.getElementById("colormapSwatches")?.addEventListener("click", (e) => {
     const btn = e.target.closest(".swatch");

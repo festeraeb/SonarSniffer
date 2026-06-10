@@ -1,5 +1,5 @@
 use crate::garmin_rsd_parser::{ParseResult, Ping};
-use crate::outputs::{build_stitched_mosaic_rgb, PipelineOptions};
+use crate::outputs::{build_stitched_mosaic_rgb, mosaic_guide_pings, PipelineOptions};
 use crate::video_enhanced::{render_enhanced_waterfall, render_mosaic_waterfall, auto_params_from_dataset, Colormap, SonarProcessingParams};
 use serde::Serialize;
 use std::path::Path;
@@ -75,6 +75,10 @@ pub fn run_video_export_pings(
         vparams.video_height = options.video_height.max(1);
         vparams.video_speed_mode = options.video_speed_mode.clone();
         vparams.video_readable_pings_per_sec = options.video_readable_pings_per_sec;
+        vparams.overlay_depth = options.overlay_depth;
+        vparams.overlay_speed = options.overlay_speed;
+        vparams.overlay_gps = options.overlay_gps;
+        let guide = mosaic_guide_pings(&parse_for_mosaic, sidescan_pair);
         vparams.colormap = match options.colormap.to_lowercase().as_str() {
             "grayscale" | "gray" | "greyscale" => Colormap::Grayscale,
             "sonar" => Colormap::SonarCustom,
@@ -88,7 +92,7 @@ pub fn run_video_export_pings(
             "jet" => Colormap::Jet,
             _ => Colormap::Amber,
         };
-        match render_mosaic_waterfall(mosaic, output_dir, vparams, progress) {
+        match render_mosaic_waterfall(mosaic, output_dir, vparams, Some(guide), progress) {
             Ok(result) => VideoExportResult {
                 enabled: true,
                 status: result.status,

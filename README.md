@@ -130,18 +130,17 @@ Sidecar binaries (`sonarsniffer-cli`, `parse_cli`, `soundtiles`) must be staged 
 **Linux / macOS**
 
 ```bash
-bash scripts/stage_tauri_sidecars.sh
+bash tools/stage_tauri_sidecars.sh
 cd desktop/src-tauri
 cargo tauri build --bundles dmg    # macOS
-# cargo tauri build --bundles msi,nsis   # Windows (on a Windows machine)
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-.\scripts\build_sonarsniffer_desktop_msi_windows.ps1
+.\tools\publish.ps1 -Release
 # or step-by-step:
-.\scripts\stage_tauri_sidecars.ps1
+.\tools\stage_tauri_sidecars.ps1
 cd desktop\src-tauri
 cargo tauri build --bundles msi,nsis
 ```

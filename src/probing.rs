@@ -833,6 +833,13 @@ mod tests {
     #[test]
     fn probe_gt56_alignment_and_gain() {
         let path = gt56_test_rsd();
+        if !path.exists() {
+            eprintln!(
+                "SKIP probe_gt56_alignment_and_gain: fixture missing at {}",
+                path.display()
+            );
+            return;
+        }
         let raw = std::fs::read(&path)
             .unwrap_or_else(|e| panic!("Cannot read test file {}: {e}", path.display()));
 
@@ -938,6 +945,13 @@ mod tests {
     #[test]
     fn gt56_clipping_analysis() {
         let path = gt56_test_rsd();
+        if !path.exists() {
+            eprintln!(
+                "SKIP gt56_clipping_analysis: fixture missing at {}",
+                path.display()
+            );
+            return;
+        }
         let raw = std::fs::read(&path)
             .unwrap_or_else(|e| panic!("Cannot read test file {}: {e}", path.display()));
 

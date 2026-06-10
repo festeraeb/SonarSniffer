@@ -104,13 +104,43 @@
         <label class="check-label"><input id="enableVideo" type="checkbox" checked> Video export</label>
         <label class="check-label"><input id="enableMosaic" type="checkbox" checked> Mosaic outputs</label>
         <label class="check-label"><input id="enableCurvelet" type="checkbox" checked> Curvelet denoise</label>
+        <label class="check-label"><input id="enableDetection" type="checkbox"> Target detection</label>
+        <label>
+          <span class="label-text">Export preset</span>
+          <select id="exportPreset">
+            <option value="" selected>Default (all outputs)</option>
+            <option value="google_earth">Google Earth</option>
+            <option value="reefmaster">ReefMaster-style</option>
+            <option value="publication">Publication</option>
+          </select>
+        </label>
         <label>
           <span class="label-text">Video speed</span>
           <select id="videoSpeedMode">
             <option value="readable" selected>Readable (~2 pings/s scroll)</option>
             <option value="survey">Survey speed (match boat)</option>
+            <option value="velocity">Velocity (GPS-weighted)</option>
           </select>
         </label>
+      </div>
+
+      <div class="options-row">
+        <label class="check-label"><input id="overlayDepth" type="checkbox"> Video: depth</label>
+        <label class="check-label"><input id="overlaySpeed" type="checkbox"> Video: speed</label>
+        <label class="check-label"><input id="overlayGps" type="checkbox"> Video: GPS</label>
+        <label class="check-label"><input id="flipPortWing" type="checkbox"> Flip port wing</label>
+        <label class="check-label"><input id="flipStarWing" type="checkbox"> Flip star wing</label>
+      </div>
+
+      <div id="suggestedSettingsBanner" class="suggested-banner hidden">
+        <div class="suggested-banner-body">
+          <strong id="suggestedTierLabel">Suggested settings</strong>
+          <p id="suggestedNotes" class="muted small"></p>
+        </div>
+        <div class="field-row tight">
+          <button id="applySuggestedBtn" class="btn primary" type="button">Apply suggested</button>
+          <button id="dismissSuggestedBtn" class="btn" type="button">Keep current</button>
+        </div>
       </div>
 
       <div id="layoutPicker" class="layout-picker hidden">

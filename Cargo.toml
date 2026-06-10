@@ -1,10 +1,10 @@
 [workspace]
-members = [".", "soundtiles"]
+members = [".", "soundtiles", "desktop/src-tauri"]
 resolver = "2"
 
 [package]
 name = "sonarsniffer"
-version = "0.8.7"
+version = "0.8.8"
 description = "SonarSniffer by NautiDog — Professional Marine Survey Analysis"
 authors = ["NautiDog Sailing"]
 edition = "2021"
@@ -72,3 +72,7 @@ default = []
 video-gstreamer = ["dep:gstreamer", "dep:gstreamer-app"]
 soundtiles = ["dep:opencv"]
 full-license = []
+jemalloc = ["dep:tikv-jemallocator"]
+
+[target.'cfg(all(any(target_os = "linux"), not(target_env = "msvc")))'.dependencies]
+tikv-jemallocator = { version = "0.6", optional = true }

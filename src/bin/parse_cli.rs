@@ -1,30 +1,34 @@
 /// parse_cli — Full pipeline CLI for SonarSniffer.
 ///
 /// Parses a sonar file, runs the output pipeline, and prints results as JSON.
-///
-/// Usage:
-///   cargo run --bin parse_cli -- <file> [--light] [--output-dir DIR] [--no-video]
-///     [--no-kml] [--no-kmz] [--no-mbtiles] [--no-mosaic] [--no-waterfall]
-///     [--no-arcgis] [--no-viewer] [--summary] [--first-n N]
 
 use std::env;
 use std::path::Path;
 
 use sonarsniffer_lib::format_detector;
+use sonarsniffer_lib::host_profile::{self, SettingsTier, SonarSurveyHint};
 use sonarsniffer_lib::outputs::{build_outputs, PipelineOptions};
 
 fn main() {
+    sonarsniffer_lib::host_profile::init_runtime();
+
     let mut args = env::args().skip(1);
     let mut file: Option<String> = None;
 
     let mut options = PipelineOptions::default();
     let mut summary_only = false;
     let mut preflight_only = false;
+    let mut host_info_only = false;
     let mut first_n: Option<usize> = None;
+    let mut settings_tier: Option<SettingsTier> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--preflight" => preflight_only = true,
+            "--host-info" => host_info_only = true,
+            "--fast" => settings_tier = Some(SettingsTier::Fast),
+            "--suggested" | "--auto-settings" => settings_tier = Some(SettingsTier::Auto),
+            "--full" => settings_tier = Some(SettingsTier::Full),
             "--light" => {
                 options.video = false;
                 options.mosaic = false;
@@ -85,14 +89,25 @@ fn main() {
     }
 
     if preflight_only {
-        let report = sonarsniffer_lib::deps::preflight_report();
-        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
-        std::process::exit(if report.ready { 0 } else { 2 });
+        let deps = sonarsniffer_lib::deps::preflight_report();
+        let host = host_profile::probe_host();
+        let output = serde_json::json!({
+            "deps": deps,
+            "host": host,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+        std::process::exit(if deps.ready { 0 } else { 2 });
+    }
+
+    if host_info_only {
+        let host = host_profile::probe_host();
+        println!("{}", serde_json::to_string_pretty(&host).unwrap_or_default());
+        return;
     }
 
     let Some(file_name) = file else {
-        eprintln!("usage: parse_cli <file> | --preflight");
-        eprintln!("  [--light] [--output-dir DIR] [--preflight] [--summary] [--first-n N] ...");
+        eprintln!("usage: parse_cli <file> | --preflight | --host-info");
+        eprintln!("  [--fast] [--suggested] [--full] [--output-dir DIR] [--summary] ...");
         std::process::exit(1);
     };
 
@@ -102,13 +117,31 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Detect format and parse
     let detected = format_detector::detect_and_parse(path);
     let mut parse_result = detected.parse;
     eprintln!("parsed pings: {}", parse_result.pings.len());
     eprintln!("format: {}", detected.format);
 
-    // Run output pipeline if we have pings
+    if let Some(tier) = settings_tier {
+        let out_dir = options.output_dir.clone();
+        let out_path = out_dir.as_deref().map(Path::new);
+        let survey = SonarSurveyHint {
+            ping_count: parse_result.pings.len(),
+            format: detected.format.to_string(),
+            hardware: None,
+        };
+        let suggested = host_profile::suggest_settings(tier, &survey, out_path);
+        for note in &suggested.notes {
+            eprintln!("[settings] {note}");
+        }
+        options = suggested.options;
+        if options.output_dir.is_none() {
+            if let Some(d) = out_path.and_then(|p| p.parent()) {
+                options.output_dir = Some(d.display().to_string());
+            }
+        }
+    }
+
     let output_summary = if !parse_result.pings.is_empty() {
         match build_outputs(path, &parse_result, &options, None, None) {
             Ok(summary) => Some(summary),
@@ -142,13 +175,13 @@ fn main() {
         }
     }
 
-    // Output JSON summary
     let output = serde_json::json!({
         "input_file": file_name,
         "format": detected.format.to_string(),
         "record_count": parse_result.record_count,
         "ping_count": ping_count,
         "channels": parse_result.channels,
+        "host": host_profile::probe_host(),
         "outputs": output_summary,
     });
 

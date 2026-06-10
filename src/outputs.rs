@@ -155,6 +155,21 @@ pub struct PipelineOptions {
     /// Default 0.05 works well for typical sonar noise levels.
     #[serde(default = "default_curvelet_threshold")]
     pub curvelet_threshold: f32,
+    /// `default` | `google_earth` | `reefmaster` | `publication`
+    #[serde(default)]
+    pub export_preset: String,
+    /// Lateral offset (m) for GT51 Y-cable transducer spacing in geographic mosaic.
+    #[serde(default)]
+    pub transducer_offset_m: f64,
+    /// Per-channel empirical TVG (discovery noise floor) instead of shared norm.
+    #[serde(default = "default_true")]
+    pub per_wing_tvg: bool,
+    /// Additional survey files for multi-run mosaic plan (experimental).
+    #[serde(default)]
+    pub extra_input_files: Vec<String>,
+    /// Cap longest geographic mosaic side (pixels). Host tuning may set 4096–8192.
+    #[serde(default)]
+    pub mosaic_max_grid_dim: Option<usize>,
 }
 
 fn default_nadir_mode() -> String {
@@ -235,6 +250,11 @@ impl Default for PipelineOptions {
             curvelet_denoise: false,
             curvelet_auto: true,
             curvelet_threshold: 0.05,
+            export_preset: String::new(),
+            transducer_offset_m: 0.0,
+            per_wing_tvg: true,
+            extra_input_files: Vec::new(),
+            mosaic_max_grid_dim: None,
         }
     }
 }
@@ -247,6 +267,32 @@ pub fn build_outputs(
     detections: Option<&DetectionSummary>,
     progress: Option<&ProgressCallback>,
 ) -> Result<OutputSummary> {
+    crate::host_profile::init_runtime();
+    let mut options = options.clone();
+    if !options.export_preset.is_empty() {
+        crate::export_presets::apply_export_preset(
+            crate::export_presets::ExportPreset::parse(&options.export_preset),
+            &mut options,
+        );
+    }
+
+    let detection_owned: Option<DetectionSummary> = if let Some(d) = detections {
+        Some(d.clone())
+    } else if !options.detection_mode.is_empty()
+        && options.detection_mode.to_lowercase() != "off"
+    {
+        let settings = crate::target_detection::DetectionSettings {
+            mode: crate::target_detection::DetectionMode::from_str(&options.detection_mode),
+            min_size: options.detection_min_size,
+            max_size: options.detection_max_size,
+            sensitivity: options.detection_sensitivity + options.detection_clutter,
+        };
+        Some(crate::target_detection::detect_targets(parsed, &settings))
+    } else {
+        None
+    };
+    let detections = detection_owned.as_ref();
+
     let parent = input_file
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
@@ -429,8 +475,9 @@ pub fn build_outputs(
                 * min_lat.to_radians().cos();
             let h_m = (max_lat - min_lat).abs() * 111320.0;
             let max_dim = w_m.max(h_m);
-            if max_dim / res > 8192.0 {
-                res = max_dim / 8192.0;
+            let grid_cap = options.mosaic_max_grid_dim.unwrap_or(8192) as f64;
+            if max_dim / res > grid_cap {
+                res = max_dim / grid_cap;
             }
         }
 
@@ -441,6 +488,26 @@ pub fn build_outputs(
             "raw" => crate::mosaic::engine::NadirMode::Raw,
             _ => crate::mosaic::engine::NadirMode::Stitch,
         };
+        let layout_mode = stitch_layout.as_ref().and_then(|proposal| {
+            options
+                .stitch_layout_id
+                .as_deref()
+                .and_then(|id| {
+                    proposal
+                        .candidates
+                        .iter()
+                        .find(|c| c.id == id)
+                        .map(|c| c.mode.clone())
+                })
+                .or_else(|| {
+                    proposal
+                        .candidates
+                        .iter()
+                        .find(|c| c.id == proposal.recommended_id)
+                        .map(|c| c.mode.clone())
+                })
+        });
+
         let engine_config = crate::mosaic::engine::MosaicConfig {
             resolution_m: res,
             colormap: options.colormap.clone(),
@@ -451,8 +518,21 @@ pub fn build_outputs(
             histogram_normalize: true,
             remove_water_column: options.remove_water_column,
             gamma: MOSAIC_GAMMA,
-            tile_zoom_levels: vec![], // tile pyramid built separately
+            tile_zoom_levels: vec![],
             output_dir: output_dir.clone(),
+            stitch: Some(crate::mosaic::engine::EngineStitchConfig {
+                port_ch: sidescan_pair.0,
+                star_ch: sidescan_pair.1,
+                layout_mode: layout_mode.unwrap_or_else(|| {
+                    if sidescan_pair.1.is_some() {
+                        "butterfly".to_string()
+                    } else {
+                        "single_wing".to_string()
+                    }
+                }),
+                transducer_offset_m: options.transducer_offset_m,
+                alignments: effective_alignments.clone(),
+            }),
         };
         let (grid, engine_log) =
             crate::mosaic::engine::build_mosaic(parsed, discovery_for_engine, &engine_config);
@@ -495,12 +575,16 @@ pub fn build_outputs(
             &path,
             &options.colormap,
             options.remove_water_column,
+            sidescan_pair,
+            &effective_alignments,
+            discovery_ref,
+            options.per_wing_tvg,
         ) {
             Ok(()) => artifacts.push(OutputArtifact {
                 kind: "mbtiles".to_string(),
                 path: path.display().to_string(),
                 details: format!(
-                    "MBTiles multi-zoom · {} pings · georeferenced track-following tiles",
+                    "MBTiles multi-zoom · {} pings · stitched sidescan when layout resolved",
                     parsed.pings.len()
                 ),
             }),
@@ -687,6 +771,43 @@ pub fn build_outputs(
                 }
                 Err(_) => {}
             }
+
+            let det_kml_path = output_dir.join("detections.kml");
+            if let Ok(()) = write_detections_kml(det, &det_kml_path) {
+                artifacts.push(OutputArtifact {
+                    kind: "detections_kml".to_string(),
+                    path: det_kml_path.display().to_string(),
+                    details: format!(
+                        "KML target folder · {} detections (load beside track.kmz in Google Earth)",
+                        det.total_detections
+                    ),
+                });
+            }
+        }
+    }
+
+    if !options.extra_input_files.is_empty() {
+        let mut paths = vec![input_file.to_path_buf()];
+        for s in &options.extra_input_files {
+            paths.push(PathBuf::from(s));
+        }
+        if let Ok(plan) = crate::multi_mosaic::plan_multi_mosaic(
+            &paths,
+            &output_dir.join("multi_mosaic"),
+            &options.colormap,
+        ) {
+            artifacts.push(OutputArtifact {
+                kind: "multi_mosaic_plan".to_string(),
+                path: output_dir
+                    .join("multi_mosaic/multi_mosaic_plan.json")
+                    .display()
+                    .to_string(),
+                details: format!(
+                    "Multi-run plan · {} files · {}",
+                    plan.input_files.len(),
+                    plan.notes.first().unwrap_or(&String::new())
+                ),
+            });
         }
     }
 
@@ -1506,6 +1627,74 @@ fn segment_by_heading(
         seg_start = split_at;
     }
     segments
+}
+
+/// Average depth (ft) and GPS-derived speed (knots) for a KMZ segment.
+fn segment_track_stats(pings: &[&Ping]) -> (f32, f32) {
+    if pings.is_empty() {
+        return (0.0, 0.0);
+    }
+    let avg_depth_ft = pings.iter().map(|p| p.depth_ft).sum::<f32>() / pings.len() as f32;
+    (avg_depth_ft, segment_speed_kts(pings))
+}
+
+fn segment_speed_kts(pings: &[&Ping]) -> f32 {
+    const M_PER_DEG_LAT: f64 = 111_320.0;
+    let mut dist_m = 0.0f64;
+    let mut dt_ms = 0u64;
+    let mut prev: Option<&Ping> = None;
+    for p in pings {
+        let valid_gps = p.latitude.is_finite()
+            && p.longitude.is_finite()
+            && (p.latitude != 0.0 || p.longitude != 0.0);
+        if let Some(prev_p) = prev {
+            if valid_gps && prev_p.timestamp_ms > 0 && p.timestamp_ms > prev_p.timestamp_ms {
+                let dlat = (p.latitude - prev_p.latitude) * M_PER_DEG_LAT;
+                let dlon = (p.longitude - prev_p.longitude)
+                    * M_PER_DEG_LAT
+                    * p.latitude.to_radians().cos();
+                dist_m += (dlat * dlat + dlon * dlon).sqrt();
+                dt_ms += p.timestamp_ms - prev_p.timestamp_ms;
+            }
+        }
+        if valid_gps {
+            prev = Some(p);
+        }
+    }
+    if dt_ms == 0 {
+        return 0.0;
+    }
+    let m_per_s = dist_m / (dt_ms as f64 / 1000.0);
+    (m_per_s * 1.94384) as f32
+}
+
+/// Pings that align 1:1 with mosaic rows (longer sidescan wing).
+pub fn mosaic_guide_pings(parsed: &ParseResult, sidescan_pair: (Option<u32>, Option<u32>)) -> Vec<Ping> {
+    let channels = pings_by_channel(parsed);
+    let port_n = sidescan_pair
+        .0
+        .and_then(|ch| channels.get(&ch))
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let star_n = sidescan_pair
+        .1
+        .and_then(|ch| channels.get(&ch))
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let guide_ch = if port_n >= star_n {
+        sidescan_pair.0
+    } else {
+        sidescan_pair.1.or(sidescan_pair.0)
+    };
+    let Some(ch) = guide_ch else {
+        return Vec::new();
+    };
+    parsed
+        .pings
+        .iter()
+        .filter(|p| p.channel == ch)
+        .cloned()
+        .collect()
 }
 
 /// Compute adaptive segmentation parameters from heading variability.
@@ -2397,13 +2586,15 @@ fn render_sidescan_stitched(
         (0.0, 1.0)
     };
 
-    // Downscan strip width: 8% of each half-width on each side = 16% of single_w total.
+    // Downscan nadir strip: wider for GT51 single-wing (DEBUG: tune strip_frac tomorrow).
+    let single_wing = port_pings.is_empty() || star_pings.is_empty();
+    let strip_frac = if single_wing { 0.24f32 } else { 0.16 };
     let strip_half_w = if !down_pings.is_empty() {
-        (single_w / 12).max(4)
+        ((single_w as f32 * strip_frac) as u32 / 2).max(8)
     } else {
         0
     };
-    let blend_px = (strip_half_w / 3).max(2);
+    let blend_px = (strip_half_w / 2).max(4);
 
     let port_flip = port_ch.map_or(true, |ch| {
         should_flip(
@@ -3532,11 +3723,30 @@ fn compute_max_zoom(bbox: &BBox) -> u32 {
 /// `max_zoom`.  At each zoom level, tiles overlapping the track bounding box
 /// are rendered by painting each ping's sonar samples as a cross-track stripe
 /// placed at the correct geographic position within the tile.
+fn wing_tvg_scale(
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
+    ch: Option<u32>,
+    per_wing: bool,
+) -> f32 {
+    if !per_wing {
+        return 1.0;
+    }
+    let Some(ch) = ch else { return 1.0 };
+    discovery
+        .and_then(|d| d.profile(ch))
+        .map(|p| (128.0 / p.noise_floor.max(1.0)).clamp(0.55, 2.2))
+        .unwrap_or(1.0)
+}
+
 fn write_mbtiles(
     parsed: &ParseResult,
     path: &Path,
     colormap: &str,
     remove_water_column: bool,
+    sidescan_pair: (Option<u32>, Option<u32>),
+    alignments: &[crate::channel_alignment::ChannelAlignment],
+    discovery: Option<&crate::channel_discovery::DiscoveryResult>,
+    per_wing_tvg: bool,
 ) -> Result<()> {
     let conn = Connection::open(path)
         .with_context(|| format!("Failed to create MBTiles DB: {}", path.display()))?;
@@ -3578,16 +3788,35 @@ fn write_mbtiles(
         )?;
     }
 
-    // Collect GPS-valid pings from the dominant sidescan channel.
-    // Prefer sidescan over downscan/depth for georeferenced outputs (wide swath).
     let channels = pings_by_channel(parsed);
-    let dominant: Vec<&Ping> = {
+    let (port_ch, star_ch) = sidescan_pair;
+    let port_vec = port_ch
+        .and_then(|pk| channels.get(&pk))
+        .cloned()
+        .unwrap_or_default();
+    let star_vec = star_ch
+        .and_then(|sk| channels.get(&sk))
+        .cloned()
+        .unwrap_or_default();
+    let stitched_mbtiles = !port_vec.is_empty() && !star_vec.is_empty();
+
+    let port_gps: Vec<&Ping> = port_vec
+        .iter()
+        .filter(|p| p.latitude.is_finite() && p.longitude.is_finite())
+        .copied()
+        .collect();
+    let star_gps: Vec<&Ping> = star_vec
+        .iter()
+        .filter(|p| p.latitude.is_finite() && p.longitude.is_finite())
+        .copied()
+        .collect();
+
+    let dominant: Vec<&Ping> = if !port_vec.is_empty() {
+        port_vec.clone()
+    } else {
         let sidescan_best = channels
             .iter()
-            .filter(|(&ch, _)| {
-                let label = channel_label(parsed, ch);
-                label.contains("sidescan")
-            })
+            .filter(|(&ch, _)| channel_label(parsed, ch).contains("sidescan"))
             .max_by_key(|(_, v)| v.len());
         let best = sidescan_best.or_else(|| channels.iter().max_by_key(|(_, v)| v.len()));
         best.map(|(_, v)| v.clone()).unwrap_or_default()
@@ -3650,28 +3879,106 @@ fn write_mbtiles(
         vec![min_skip; gps_pings.len()]
     };
 
-    // Pre-render each ping's sonar data as a grey row (empirical TVG + segment norms)
-    let swath_px = 128usize;
+    let half_swath_px = 128usize;
+    let swath_px = if stitched_mbtiles {
+        half_swath_px * 2
+    } else {
+        half_swath_px
+    };
+
+    let port_scale = wing_tvg_scale(discovery, port_ch, per_wing_tvg);
+    let star_scale = wing_tvg_scale(discovery, star_ch, per_wing_tvg);
+
+    let port_off = if remove_water_column && !port_gps.is_empty() {
+        smooth_nadir_offsets(&detect_per_ping_nadir(&port_gps))
+    } else {
+        vec![0; port_gps.len()]
+    };
+    let star_off = if remove_water_column && !star_gps.is_empty() {
+        smooth_nadir_offsets(&detect_per_ping_nadir(&star_gps))
+    } else {
+        vec![0; star_gps.len()]
+    };
+    let port_tvg = compute_empirical_tvg(&port_gps, &port_off);
+    let star_tvg = compute_empirical_tvg(&star_gps, &star_off);
+    let (port_p2, port_p98) = compute_segment_norm(&port_gps, &port_off, &port_tvg);
+    let (star_p2, star_p98) = compute_segment_norm(&star_gps, &star_off, &star_tvg);
+
+    let port_flip = port_ch.map_or(true, |ch| {
+        should_flip(parsed, ch, alignments, true, discovery, median_nadir_skip(&port_off))
+    });
+    let star_flip = star_ch.map_or(false, |ch| {
+        should_flip(parsed, ch, alignments, false, discovery, median_nadir_skip(&star_off))
+    });
+
     let tvg_lut = compute_empirical_tvg(&gps_pings, &nadir_offsets);
     let (seg_p2, seg_p98) = compute_segment_norm(&gps_pings, &nadir_offsets, &tvg_lut);
-    let ping_rows: Vec<Vec<u8>> = gps_pings
-        .iter()
-        .enumerate()
-        .map(|(i, ping)| {
-            let skip = nadir_offsets.get(i).copied().unwrap_or(0);
-            ping_to_gray_row_normed(
-                ping,
-                skip,
-                swath_px,
-                MOSAIC_GAMMA,
-                seg_p2,
-                seg_p98,
-                &tvg_lut,
-            )
-        })
-        .collect();
 
-    let m_per_sample = swath_half_m / (swath_px as f64 / 2.0).max(1.0);
+    let ping_rows: Vec<Vec<u8>> = if stitched_mbtiles {
+        gps_pings
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                let pi = (i * port_gps.len()) / gps_pings.len().max(1);
+                let si = (i * star_gps.len()) / gps_pings.len().max(1);
+                let p_idx = pi.min(port_gps.len().saturating_sub(1));
+                let s_idx = si.min(star_gps.len().saturating_sub(1));
+                let mut row = vec![0u8; swath_px];
+                if let Some(pp) = port_gps.get(p_idx) {
+                    let skip = port_off.get(p_idx).copied().unwrap_or(0);
+                    let mut port_row = ping_to_gray_row_normed(
+                        pp,
+                        skip,
+                        half_swath_px,
+                        MOSAIC_GAMMA,
+                        port_p2 * port_scale as f32,
+                        port_p98 * port_scale as f32,
+                        &port_tvg,
+                    );
+                    if port_flip {
+                        port_row.reverse();
+                    }
+                    row[..half_swath_px].copy_from_slice(&port_row);
+                }
+                if let Some(sp) = star_gps.get(s_idx) {
+                    let skip = star_off.get(s_idx).copied().unwrap_or(0);
+                    let mut star_row = ping_to_gray_row_normed(
+                        sp,
+                        skip,
+                        half_swath_px,
+                        MOSAIC_GAMMA,
+                        star_p2 * star_scale as f32,
+                        star_p98 * star_scale as f32,
+                        &star_tvg,
+                    );
+                    if star_flip {
+                        star_row.reverse();
+                    }
+                    row[half_swath_px..].copy_from_slice(&star_row);
+                }
+                row
+            })
+            .collect()
+    } else {
+        gps_pings
+            .iter()
+            .enumerate()
+            .map(|(i, ping)| {
+                let skip = nadir_offsets.get(i).copied().unwrap_or(0);
+                ping_to_gray_row_normed(
+                    ping,
+                    skip,
+                    swath_px,
+                    MOSAIC_GAMMA,
+                    seg_p2,
+                    seg_p98,
+                    &tvg_lut,
+                )
+            })
+            .collect()
+    };
+
+    let m_per_sample = swath_half_m / (half_swath_px as f64).max(1.0);
 
     // Render tiles from max zoom down to min zoom
     for z in min_zoom..=max_zoom {
@@ -4013,6 +4320,10 @@ fn write_kmz(
         strip: image::RgbImage,
         corners: [(f64, f64); 4],
         idx: usize,
+        ping_start: usize,
+        ping_end: usize,
+        avg_depth_ft: f32,
+        avg_speed_kts: f32,
     }
     let mut segments: Vec<KmzSegment> = Vec::new();
 
@@ -4109,10 +4420,18 @@ fn write_kmz(
             discovery,
         );
 
+        let (avg_depth_ft, avg_speed_kts) = segment_track_stats(seg_guide);
+        let ping_start = seg_ranges[seg_idx].0;
+        let ping_end = seg_ranges[seg_idx].1.saturating_sub(1);
+
         segments.push(KmzSegment {
             strip,
             corners,
             idx: seg_idx,
+            ping_start,
+            ping_end,
+            avg_depth_ft,
+            avg_speed_kts,
         });
     }
 
@@ -4143,6 +4462,15 @@ fn write_kmz(
             overlay_kml_parts.push(format!(
                 "  <GroundOverlay>\
                 \n    <name>Segment {}</name>\
+                \n    <ExtendedData>\
+                \n      <Data name=\"ping_start\"><value>{}</value></Data>\
+                \n      <Data name=\"ping_end\"><value>{}</value></Data>\
+                \n      <Data name=\"avg_depth_ft\"><value>{:.1}</value></Data>\
+                \n      <Data name=\"avg_speed_kts\"><value>{:.2}</value></Data>\
+                \n    </ExtendedData>\
+                \n    <BalloonStyle>\
+                \n      <text><![CDATA[<b>Segment</b><br/>Pings <b>$[ping_start]</b>–<b>$[ping_end]</b><br/>Avg depth <b>$[avg_depth_ft] ft</b><br/>Speed <b>$[avg_speed_kts] kt</b>]]></text>\
+                \n    </BalloonStyle>\
                 \n    <color>ffffffff</color>\
                 \n    <drawOrder>{}</drawOrder>\
                 \n    <Icon><href>{}</href></Icon>\
@@ -4153,6 +4481,10 @@ fn write_kmz(
                 \n    </gx:LatLonQuad>\
                 \n  </GroundOverlay>",
                 seg.idx,
+                seg.ping_start,
+                seg.ping_end,
+                seg.avg_depth_ft,
+                seg.avg_speed_kts,
                 seg.idx + 1,
                 png_name,
                 seg.corners[0].0,
@@ -4170,6 +4502,15 @@ fn write_kmz(
             overlay_kml_parts.push(format!(
                 "  <GroundOverlay>\
                 \n    <name>Segment {}</name>\
+                \n    <ExtendedData>\
+                \n      <Data name=\"ping_start\"><value>{}</value></Data>\
+                \n      <Data name=\"ping_end\"><value>{}</value></Data>\
+                \n      <Data name=\"avg_depth_ft\"><value>{:.1}</value></Data>\
+                \n      <Data name=\"avg_speed_kts\"><value>{:.2}</value></Data>\
+                \n    </ExtendedData>\
+                \n    <BalloonStyle>\
+                \n      <text><![CDATA[<b>Segment</b><br/>Pings <b>$[ping_start]</b>–<b>$[ping_end]</b><br/>Avg depth <b>$[avg_depth_ft] ft</b><br/>Speed <b>$[avg_speed_kts] kt</b>]]></text>\
+                \n    </BalloonStyle>\
                 \n    <color>ffffffff</color>\
                 \n    <drawOrder>{}</drawOrder>\
                 \n    <Icon><href>{}</href></Icon>\
@@ -4180,6 +4521,10 @@ fn write_kmz(
                 \n    </gx:LatLonQuad>\
                 \n  </GroundOverlay>",
                 seg.idx,
+                seg.ping_start,
+                seg.ping_end,
+                seg.avg_depth_ft,
+                seg.avg_speed_kts,
                 seg.idx + 1,
                 webp_name,
                 seg.corners[0].0,
@@ -4862,6 +5207,44 @@ load();
 }
 
 /// Build a GeoJSON FeatureCollection from detection results.
+/// KML folder of detection placemarks for Google Earth (DEBUG: refine icons tomorrow).
+fn write_detections_kml(det: &DetectionSummary, path: &Path) -> Result<()> {
+    let mut placemarks = String::new();
+    for d in det.detections.iter().take(500) {
+        if !d.latitude.is_finite() || !d.longitude.is_finite() {
+            continue;
+        }
+        placemarks.push_str(&format!(
+            "    <Placemark>\
+            \n      <name>{} ({})</name>\
+            \n      <description>depth {:.1}m · conf {:.0}%</description>\
+            \n      <Point><coordinates>{:.7},{:.7},0</coordinates></Point>\
+            \n    </Placemark>\n",
+            d.classification,
+            d.size_class,
+            d.depth_m,
+            d.confidence * 100.0,
+            d.longitude,
+            d.latitude
+        ));
+    }
+    let kml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+  <name>SonarSniffer Targets</name>
+  <Folder>
+    <name>Detections ({})</name>
+{placemarks}  </Folder>
+</Document>
+</kml>
+"#,
+        det.total_detections
+    );
+    fs::write(path, kml).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
 fn build_detections_geojson(det: &DetectionSummary) -> serde_json::Value {
     let features: Vec<serde_json::Value> = det
         .detections

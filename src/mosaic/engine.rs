@@ -10,11 +10,13 @@
 //! - Adds trapezoidal interpolation, TVG, slant-range correction, nadir handling.
 //! - Produces KML Super Overlays with `gx:LatLonQuad` for Google Earth.
 
+use crate::channel_alignment::ChannelAlignment;
 use crate::channel_discovery::{DiscoveryResult, SignalArchetype, SpatialRole};
 use crate::garmin_rsd_parser::{ParseResult, Ping};
 use crate::mosaic::grid::MosaicGrid;
 use crate::mosaic::projection::{latlon_to_meters, meters_to_latlon};
 use image::{ImageBuffer, Rgba, RgbaImage};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -67,6 +69,22 @@ pub struct MosaicConfig {
     pub tile_zoom_levels: Vec<u32>,
     /// Base output directory.
     pub output_dir: PathBuf,
+    /// Resolved stitch layout from pipeline (honours `stitch_layout_id`).
+    #[serde(default)]
+    pub stitch: Option<EngineStitchConfig>,
+}
+
+/// Layout-aware stitch parameters for geographic mosaic engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineStitchConfig {
+    pub port_ch: Option<u32>,
+    pub star_ch: Option<u32>,
+    /// `butterfly` | `single_wing`
+    pub layout_mode: String,
+    /// GT51 Y-cable lateral offset in metres (applied cross-track).
+    pub transducer_offset_m: f64,
+    #[serde(default)]
+    pub alignments: Vec<ChannelAlignment>,
 }
 
 impl Default for MosaicConfig {
@@ -83,6 +101,7 @@ impl Default for MosaicConfig {
             gamma: 0.65,
             tile_zoom_levels: vec![14, 15, 16, 17, 18],
             output_dir: PathBuf::from("."),
+            stitch: None,
         }
     }
 }
@@ -209,9 +228,25 @@ pub fn build_mosaic(
     };
 
     // ── Project pings by scanline for trapezoidal interpolation ─────────────
-    // Group sidescan pings by channel, sorted by timestamp.
-    let (port_ch, star_ch) = discovery.primary_sidescan_pair();
-    let center_ch = discovery.best_center_channel();
+    let (port_ch, star_ch, layout_mode, transducer_offset_m) = if let Some(s) = &config.stitch {
+        (
+            s.port_ch,
+            s.star_ch,
+            s.layout_mode.clone(),
+            s.transducer_offset_m,
+        )
+    } else {
+        let (p, st) = discovery.primary_sidescan_pair();
+        (p, st, "butterfly".to_string(), 0.0)
+    };
+    log.push(format!(
+        "Engine stitch: port={port_ch:?} star={star_ch:?} mode={layout_mode} offset_m={transducer_offset_m:.2}"
+    ));
+    let center_ch = if layout_mode == "single_wing" {
+        discovery.best_center_channel()
+    } else {
+        discovery.best_center_channel()
+    };
 
     // For each channel, collect pings in timestamp order
     let project_channel = |ch_id: u32, role: SpatialRole| {
@@ -241,16 +276,14 @@ pub fn build_mosaic(
             .unwrap_or((0.0, 65535.0));
         let norm_span = (norm_p98 - norm_p2).max(1.0);
 
-        // Process consecutive ping pairs for trapezoidal interpolation
-        for pair in pings.windows(2) {
-            let ping_a = pair[0];
-            let ping_b = pair[1];
+        // Process consecutive ping pairs for trapezoidal interpolation (parallel over pairs).
+        let pairs: Vec<(&Ping, &Ping)> = pings
+            .windows(2)
+            .filter(|pair| pair[1].timestamp_ms.saturating_sub(pair[0].timestamp_ms) <= 2000)
+            .map(|pair| (pair[0], pair[1]))
+            .collect();
 
-            // Skip if pings are too far apart in time (>2 seconds = different track)
-            if ping_b.timestamp_ms.saturating_sub(ping_a.timestamp_ms) > 2000 {
-                continue;
-            }
-
+        pairs.par_iter().for_each(|&(ping_a, ping_b)| {
             let (ax, ay) = latlon_to_meters(ping_a.latitude, ping_a.longitude);
             let (bx, by) = latlon_to_meters(ping_b.latitude, ping_b.longitude);
 
@@ -271,7 +304,7 @@ pub fn build_mosaic(
             let n_b = ping_b.samples.len();
             let n_max = n_a.max(n_b);
             if n_max == 0 {
-                continue;
+                return;
             }
 
             // True swath width for each ping
@@ -369,14 +402,21 @@ pub fn build_mosaic(
 
                     let final_weight = gauss_weight * edge_weight;
 
+                    let role_sign = match role {
+                        SpatialRole::Port => -1.0,
+                        SpatialRole::Starboard => 1.0,
+                        _ => 0.0,
+                    };
+                    let off_x = role_sign * transducer_offset_m * cos_a;
+                    let off_y = role_sign * transducer_offset_m * sin_a;
                     let proj_m = ground_m * center_scale;
-                    let px = cx + proj_m * cos_a;
-                    let py = cy + proj_m * sin_a;
+                    let px = cx + off_x + proj_m * cos_a;
+                    let py = cy + off_y + proj_m * sin_a;
 
                     grid.add_weighted_sample(px, py, normalized, final_weight);
                 }
             }
-        }
+        });
     };
 
     // ── Project all discovered channels ─────────────────────────────────────

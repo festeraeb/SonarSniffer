@@ -94,7 +94,6 @@ pub fn detect_targets(
 
     // 1. Thresholding: Find samples above the noise floor
     // We use sensitivity to adjust the threshold relative to the mean intensity
-    let mut all_samples: Vec<u16> = Vec::new();
     let mut mean_intensity = 0.0;
     let mut count = 0;
 
@@ -116,9 +115,8 @@ pub fn detect_targets(
     // 2. Connected Component Labeling (Simplified for 1D-per-ping stream)
     // We group adjacent high-intensity samples within and across pings
     let mut detections = Vec::new();
-    let mut visited = vec![false; parse.pings.len() * 1024]; // Assuming max samples per ping for simplicity, or use actual length
 
-    // For a real implementation, we iterate through the data to find contiguous blocks
+    // DEBUG tomorrow: replace run-length threshold with 2D connected components on mosaic grid.
     // Here we simulate the extraction of blobs from the ParseResult
     for (p_idx, ping) in parse.pings.iter().enumerate() {
         let mut s_idx = 0;
@@ -145,7 +143,6 @@ pub fn detect_targets(
                     
                     // Calculate spatial metrics (mocking geometry based on ping/sample)
                     // In real sonar, range = speed * time / 2
-                    let range_m = parse.pings[p_idx].depth_m; 
                     let depth_m = parse.pings[p_idx].depth_m;
 
                     detections.push(Detection {

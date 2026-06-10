@@ -10,12 +10,15 @@ pub enum VideoSpeedMode {
     Readable,
     /// Match average survey ping rate from timestamps (capped for sanity).
     Survey,
+    /// Scroll faster in straightaways, slower in turns — GPS speed weighted (DEBUG tomorrow).
+    Velocity,
 }
 
 impl VideoSpeedMode {
     pub fn from_option(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "survey" | "boat" | "realtime" | "real_time" => Self::Survey,
+            "velocity" | "gps" | "speed" => Self::Velocity,
             _ => Self::Readable,
         }
     }
@@ -46,9 +49,9 @@ pub fn build_scroll_timeline(
     let display_pps = match speed_mode {
         VideoSpeedMode::Readable => readable_pps,
         VideoSpeedMode::Survey => survey_pps.clamp(0.25, 60.0),
+        VideoSpeedMode::Velocity => survey_pps.clamp(0.5, 30.0),
     };
 
-    let step = display_pps / fps as f64;
     let mut end_indices = Vec::new();
     if num_pings == 0 {
         return ScrollTimeline {
@@ -58,14 +61,31 @@ pub fn build_scroll_timeline(
         };
     }
 
-    let mut pos = 0.0f64;
     let last = num_pings - 1;
-    while (pos as usize) < last {
-        end_indices.push(pos as usize);
-        pos += step;
-    }
-    if end_indices.last().copied() != Some(last) {
-        end_indices.push(last);
+    if speed_mode == VideoSpeedMode::Velocity && pings.len() >= 2 {
+        let frame_dt = 1.0 / fps as f64;
+        let base_pps = readable_pps;
+        let mut ping_f = 0.0f64;
+        while (ping_f as usize) < last {
+            end_indices.push(ping_f as usize);
+            let i = ping_f as usize;
+            let kts = super::hud::speed_kts_at(pings, i);
+            let speed_factor = (kts as f64 / 3.0).clamp(0.35, 2.5);
+            ping_f += base_pps * speed_factor * frame_dt;
+        }
+        if end_indices.last().copied() != Some(last) {
+            end_indices.push(last);
+        }
+    } else {
+        let step = display_pps / fps as f64;
+        let mut pos = 0.0f64;
+        while (pos as usize) < last {
+            end_indices.push(pos as usize);
+            pos += step;
+        }
+        if end_indices.last().copied() != Some(last) {
+            end_indices.push(last);
+        }
     }
 
     ScrollTimeline {

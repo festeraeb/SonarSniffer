@@ -16,6 +16,7 @@
 
 mod colormaps;
 mod filters;
+mod hud;
 mod processing;
 mod renderer;
 mod scroll;
@@ -162,6 +163,11 @@ pub struct SonarProcessingParams {
     /// Strip the near-field blank water-column region from every ping row.
     /// Uses the same auto-detect nadir approach as the static mosaic images.
     pub remove_water_column: bool,
+
+    /// Burn depth / speed / GPS into scrolling mosaic video frames.
+    pub overlay_depth: bool,
+    pub overlay_speed: bool,
+    pub overlay_gps: bool,
 }
 
 fn default_video_speed_mode() -> String {
@@ -219,6 +225,10 @@ impl Default for SonarProcessingParams {
 
             // Water column
             remove_water_column: false,
+
+            overlay_depth: false,
+            overlay_speed: false,
+            overlay_gps: false,
         }
     }
 }
@@ -319,7 +329,9 @@ pub struct ProcessingStats {
 pub fn mosaic_to_scroll_frames(
     mosaic: &image::RgbImage,
     params: &SonarProcessingParams,
+    guide_pings: Option<&[crate::garmin_rsd_parser::Ping]>,
 ) -> Vec<ProcessedFrame> {
+    use hud::draw_scroll_hud_guide;
     use scroll::{build_scroll_timeline, scroll_window, VideoSpeedMode};
 
     let width = mosaic.width();
@@ -331,12 +343,13 @@ pub fn mosaic_to_scroll_frames(
     let speed = VideoSpeedMode::from_option(&params.video_speed_mode);
     let timeline = build_scroll_timeline(
         height as usize,
-        &[],
+        guide_pings.unwrap_or(&[]),
         speed,
         params.video_readable_pings_per_sec,
         params.fps,
     );
 
+    let hud_on = params.overlay_depth || params.overlay_speed || params.overlay_gps;
     let bg = [5u8, 10, 20];
     let mut frames = Vec::with_capacity(timeline.end_ping_indices.len());
     for &end_row in &timeline.end_ping_indices {
@@ -356,6 +369,20 @@ pub fn mosaic_to_scroll_frames(
                 pixels[off + 2] = px[2];
             }
         }
+        if hud_on {
+            if let Some(guide) = guide_pings {
+                draw_scroll_hud_guide(
+                    &mut pixels,
+                    width,
+                    viewport as u32,
+                    guide,
+                    end_row,
+                    params.overlay_depth,
+                    params.overlay_speed,
+                    params.overlay_gps,
+                );
+            }
+        }
         frames.push(ProcessedFrame {
             pixels,
             width,
@@ -370,6 +397,7 @@ pub fn render_mosaic_waterfall<F>(
     mosaic: image::RgbImage,
     output_dir: &Path,
     params: SonarProcessingParams,
+    guide_pings: Option<Vec<crate::garmin_rsd_parser::Ping>>,
     on_progress: F,
 ) -> anyhow::Result<EnhancedVideoResult>
 where
@@ -377,7 +405,8 @@ where
 {
     use anyhow::Context;
     let params = params;
-    let frames = mosaic_to_scroll_frames(&mosaic, &params);
+    let guide_ref = guide_pings.as_deref();
+    let frames = mosaic_to_scroll_frames(&mosaic, &params, guide_ref);
     let stats = DatasetStatistics {
         total_pings: frames.len(),
         primary_channel: 0,

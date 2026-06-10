@@ -38,7 +38,7 @@ jobs:
         run: cargo install tauri-cli --version "^2.0" --locked
       - name: Stage sidecars
         shell: pwsh
-        run: ./scripts/stage_tauri_sidecars.ps1
+        run: ./tools/stage_tauri_sidecars.ps1
       - name: Cache Tauri bundler tools (NSIS/WiX)
         uses: actions/cache@v4
         with:
@@ -105,7 +105,7 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0" --locked
       - name: Stage sidecars
-        run: bash scripts/stage_tauri_sidecars.sh
+        run: bash tools/stage_tauri_sidecars.sh
       - name: Build desktop DMG
         working-directory: desktop/src-tauri
         run: cargo tauri build --bundles dmg

@@ -14,6 +14,10 @@ Read `.cursor/rules/stitch-orientation.mdc` before changing `channel_discovery.r
 
 **Video:** scrolling waterfall — `readable` (~2 pings/s) or `survey` (match file ping rate); bottom-fill then scroll up (`video_enhanced/scroll.rs`).
 
+**Host tuning:** `host_profile.rs` probes CPU/RAM/output path and suggests pipeline tiers (`--fast`, `--suggested` on CLI). Regression: `.\tools\regression_smoke.ps1 -Fast`.
+
 ## Build
 
 Network share `R:\sonarsniffer\target` may deny writes. Build under `%LOCALAPPDATA%\SonarSniffer-build` with `CARGO_TARGET_DIR` set.
+
+**Single library crate:** edit `src/` only. Desktop is a thin Tauri shell (`desktop/src-tauri/src/{main,lib,commands}.rs`). Before release run `.\tools\publish.ps1`.
