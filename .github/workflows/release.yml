@@ -72,8 +72,13 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist-installers | Out-Null
-          Get-ChildItem desktop/src-tauri/target/release/bundle/msi -Filter *.msi | Copy-Item -Destination dist-installers/
-          Get-ChildItem desktop/src-tauri/target/release/bundle/nsis -Recurse -Filter SonarSniffer*.exe | Copy-Item -Destination dist-installers/
+          $bundleRoot = if (Test-Path "target/release/bundle") { "target/release/bundle" } else { "desktop/src-tauri/target/release/bundle" }
+          if (Test-Path "$bundleRoot/msi") {
+            Get-ChildItem "$bundleRoot/msi" -Filter *.msi | Copy-Item -Destination dist-installers/
+          }
+          if (Test-Path "$bundleRoot/nsis") {
+            Get-ChildItem "$bundleRoot/nsis" -Recurse -Filter SonarSniffer*.exe | Copy-Item -Destination dist-installers/
+          }
           if (Test-Path dist/SonarSniffer-Setup.exe) { Copy-Item dist/SonarSniffer-Setup.exe dist-installers/ }
       - uses: actions/upload-artifact@v4
         with:
