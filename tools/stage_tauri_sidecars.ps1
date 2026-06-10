@@ -29,33 +29,27 @@ try {
     Write-Host "Building CLI sidecars ($BuildProfile) -> $targetDir"
     if ($BuildProfile -eq "release") {
         Invoke-CargoBuild build --release --no-default-features --bin sonarsniffer-cli --bin parse_cli
+        Invoke-CargoBuild build --release -p soundtiles --bin soundtiles
     } else {
         Invoke-CargoBuild build --no-default-features --bin sonarsniffer-cli --bin parse_cli
+        Invoke-CargoBuild build -p soundtiles --bin soundtiles
     }
 
     $binDir = Join-Path $RepoRoot "desktop\src-tauri\binaries"
     New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
-    $suffix = if ($IsWindows -or $env:OS -match "Windows") { ".exe" } else { "" }
+    $ext = if ($IsWindows -or $env:OS -match "Windows") { ".exe" } else { "" }
     $outProfile = if ($BuildProfile -eq "release") { "release" } else { "debug" }
-    $cliSrc = Join-Path $targetDir "$outProfile\sonarsniffer-cli$suffix"
-    $parseSrc = Join-Path $targetDir "$outProfile\parse_cli$suffix"
+    $triple = (& rustc --print host-tuple).Trim()
 
-    foreach ($pair in @(
-            @{ Src = $cliSrc; Dst = Join-Path $binDir "sonarsniffer-cli$suffix" },
-            @{ Src = $parseSrc; Dst = Join-Path $binDir "parse_cli$suffix" }
-        )) {
-        if (-not (Test-Path $pair.Src)) {
-            throw "Missing build output: $($pair.Src)"
+    foreach ($name in @("sonarsniffer-cli", "parse_cli", "soundtiles")) {
+        $src = Join-Path $targetDir "$outProfile\$name$ext"
+        $dst = Join-Path $binDir "$name-$triple$ext"
+        if (-not (Test-Path $src)) {
+            throw "Missing build output: $src"
         }
-        Copy-Item -Force $pair.Src $pair.Dst
-        Write-Host "  staged $($pair.Dst)"
-    }
-
-    $tilesSrc = Join-Path $targetDir "$outProfile\soundtiles$suffix"
-    if (Test-Path $tilesSrc) {
-        Copy-Item -Force $tilesSrc (Join-Path $binDir "soundtiles$suffix")
-        Write-Host "  staged soundtiles"
+        Copy-Item -Force $src $dst
+        Write-Host "  staged $dst"
     }
 }
 finally {

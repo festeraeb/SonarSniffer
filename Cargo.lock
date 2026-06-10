@@ -4935,7 +4935,7 @@ dependencies = [
 
 [[package]]
 name = "sonarsniffer"
-version = "0.8.10"
+version = "0.8.12"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5487,7 +5487,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-appsonarsniffer"
-version = "0.8.10"
+version = "0.8.12"
 dependencies = [
  "rfd",
  "serde",
