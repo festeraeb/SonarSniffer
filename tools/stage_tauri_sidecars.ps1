@@ -15,7 +15,7 @@ $targetDir = if ($env:CARGO_TARGET_DIR) {
 $env:CARGO_TARGET_DIR = $targetDir
 
 function Invoke-CargoBuild {
-    param([string[]]$BuildArgs)
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$BuildArgs)
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     & cargo @BuildArgs
