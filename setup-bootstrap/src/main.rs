@@ -1,6 +1,8 @@
 //! Double-click launcher: extract embedded kit → elevated PowerShell → full install.
 #![cfg_attr(not(windows), allow(unused_imports))]
 
+mod webview;
+
 use std::fs::{self, File};
 use std::io::copy;
 use std::path::{Path, PathBuf};
@@ -25,6 +27,20 @@ fn main() {
 #[cfg(windows)]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("SonarSniffer — preparing install...\n");
+
+    let wv2 = webview::detect_webview2();
+    if wv2.present {
+        println!(
+            "WebView2: detected ({}){}",
+            wv2.method,
+            wv2.version
+                .as_ref()
+                .map(|v| format!(" version {v}"))
+                .unwrap_or_default()
+        );
+    } else {
+        println!("WebView2: not detected — installer will attempt runtime install.");
+    }
 
     let staging = extract_payload()?;
     let install_ps1 = staging.join("install_sonarsniffer_full.ps1");
@@ -107,11 +123,37 @@ fn launch_powershell_elevated(
     let wd = workdir.to_string_lossy().replace('\'', "''");
     let scr = script.to_string_lossy().replace('\'', "''");
     let elevate_cmd = format!(
-        "Start-Process -FilePath '{ps}' -Verb RunAs -Wait -ArgumentList @(
-            '-NoProfile','-ExecutionPolicy','Bypass',
-            '-WorkingDirectory','{wd}',
-            '-File','{scr}'
-        )"
+        r#"$log = Join-Path $env:TEMP 'SonarSniffer-install.log'
+function Log($m) {{ Add-Content -LiteralPath $log -Value "[$(Get-Date -Format s)] [bootstrap] $m" }}
+$max = 3
+$timeoutSec = 90
+for ($attempt = 1; $attempt -le $max; $attempt++) {{
+  Log "UAC elevation attempt $attempt of $max"
+  Write-Host ''
+  Write-Host 'Windows is waiting for Administrator approval.' -ForegroundColor Yellow
+  Write-Host 'Look for a UAC prompt — it may be behind other windows.' -ForegroundColor Yellow
+  Write-Host ''
+  $p = Start-Process -FilePath '{ps}' -Verb RunAs -PassThru -ArgumentList @(
+    '-NoProfile','-ExecutionPolicy','Bypass',
+    '-WorkingDirectory','{wd}',
+    '-File','{scr}','-StrictSilent'
+  )
+  if (-not $p) {{ throw 'Start-Process RunAs returned null' }}
+  $done = $p.WaitForExit($timeoutSec * 1000)
+  if ($done) {{
+    if ($p.ExitCode -eq 0) {{ Log "Elevation succeeded"; exit 0 }}
+    Log "Elevated installer exit $($p.ExitCode)"
+    exit $p.ExitCode
+  }}
+  try {{ $p.Kill() }} catch {{}}
+  Log "UAC attempt $attempt timed out after ${timeoutSec}s"
+  if ($attempt -lt $max) {{
+    $choice = Read-Host '[R] Retry elevation / [C] Cancel'
+    if ($choice -match '^[Cc]') {{ exit 1 }}
+  }}
+}}
+Write-Error "Elevation failed after $max attempts"
+exit 1"#
     );
     let status = Command::new(&ps)
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &elevate_cmd])

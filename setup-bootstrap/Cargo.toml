@@ -2,7 +2,7 @@
 
 [package]
 name = "sonarsniffer-setup"
-version = "0.8.0"
+version = "0.8.16"
 edition = "2021"
 description = "Single-file SonarSniffer Windows setup launcher (extract + PowerShell install)"
 
@@ -12,3 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

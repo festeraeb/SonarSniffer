@@ -3,6 +3,13 @@
 .SYNOPSIS
   Pack Tauri desktop + CLI + install script into one SonarSniffer-Setup.exe.
 
+.DESCRIPTION
+  Run on native Windows AFTER building:
+    1. sonarsniffer CLI:  cargo build --release (in sonarsniffer/)
+    2. desktop MSI:      scripts/build_sonarsniffer_desktop_msi_windows.ps1
+
+  Output: dist/SonarSniffer-Setup.exe  (single file — double-click to install)
+
 .EXAMPLE
   .\scripts\pack_sonarsniffer_windows_setup.ps1
 #>
@@ -23,8 +30,9 @@ $dist = Join-Path $RepoRoot "dist"
 $kit = Join-Path $dist "SonarSniffer-Setup-kit"
 $payloadZip = Join-Path $dist "SonarSniffer-Setup-payload.zip"
 $setupOut = Join-Path $dist "SonarSniffer-Setup.exe"
-$tauriDir = Join-Path $RepoRoot "desktop\src-tauri"
-$bootstrapDir = Join-Path $RepoRoot "setup-bootstrap"
+$tauriDir = Join-Path $RepoRoot "sonarsniffer\desktop\src-tauri"
+$ssDir = Join-Path $RepoRoot "sonarsniffer"
+$bootstrapDir = Join-Path $RepoRoot "sonarsniffer\setup-bootstrap"
 $installScript = Join-Path $RepoRoot "scripts\install_sonarsniffer_full.ps1"
 
 function Write-Step($m) { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
@@ -36,17 +44,33 @@ if (Test-Path $kit) { Remove-Item -Recurse -Force $kit }
 New-Item -ItemType Directory -Force -Path $kit | Out-Null
 
 Copy-Item $installScript (Join-Path $kit "install_sonarsniffer_full.ps1") -Force
+$moduleSrc = Join-Path $RepoRoot "scripts\lib\SonarSniffer.Install.psm1"
+if (Test-Path $moduleSrc) {
+    $libDir = Join-Path $kit "lib"
+    New-Item -ItemType Directory -Force -Path $libDir | Out-Null
+    Copy-Item $moduleSrc (Join-Path $libDir "SonarSniffer.Install.psm1") -Force
+    Write-Host "  + lib\SonarSniffer.Install.psm1"
+} else {
+    Write-Host "  WARN missing $moduleSrc" -ForegroundColor Yellow
+}
+$pathScript = Join-Path $RepoRoot "scripts\windows_add_gstreamer_path.ps1"
+if (Test-Path $pathScript) {
+    Copy-Item $pathScript (Join-Path $kit "windows_add_gstreamer_path.ps1") -Force
+    Write-Host "  + windows_add_gstreamer_path.ps1"
+}
 
+# CLI (release)
 foreach ($name in @("sonarsniffer-cli.exe", "parse_cli.exe")) {
-    $src = Join-Path $RepoRoot "target\release\$name"
+    $src = Join-Path $ssDir "target\release\$name"
     if (Test-Path $src) {
         Copy-Item $src (Join-Path $kit $name) -Force
         Write-Host "  + $name"
     } else {
-        Write-Host "  WARN missing $src — run scripts/stage_tauri_sidecars.ps1" -ForegroundColor Yellow
+        Write-Host "  WARN missing $src — run: cd sonarsniffer && cargo build --release" -ForegroundColor Yellow
     }
 }
 
+# MSI from Tauri bundle
 $msiDir = Join-Path $tauriDir "target\release\bundle\msi"
 if (Test-Path $msiDir) {
     Get-ChildItem $msiDir -Filter "*.msi" | ForEach-Object {
@@ -57,6 +81,7 @@ if (Test-Path $msiDir) {
     Write-Host "  WARN no MSI — run scripts/build_sonarsniffer_desktop_msi_windows.ps1" -ForegroundColor Yellow
 }
 
+# Portable desktop exe (if built without MSI)
 $nsisDir = Join-Path $tauriDir "target\release\bundle\nsis"
 if (Test-Path $nsisDir) {
     $portable = Get-ChildItem $nsisDir -Recurse -Filter "SonarSniffer.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -66,7 +91,8 @@ if (Test-Path $nsisDir) {
     }
 }
 
-$ui = Join-Path $RepoRoot "desktop\ui"
+# UI assets (optional, for portable)
+$ui = Join-Path $RepoRoot "sonarsniffer\desktop\ui"
 if (Test-Path $ui) {
     Copy-Item $ui (Join-Path $kit "ui") -Recurse -Force
     Write-Host "  + ui/"
@@ -100,3 +126,5 @@ if (-not $SkipLauncherBuild) {
 Write-Host ""
 Write-Host "READY — one file to copy/run:" -ForegroundColor Green
 Write-Host "  $setupOut"
+Write-Host ""
+Write-Host "Double-click SonarSniffer-Setup.exe → PowerShell (Admin) → prereqs + MSI + CLIs"
