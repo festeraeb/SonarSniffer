@@ -30,9 +30,21 @@ $dist = Join-Path $RepoRoot "dist"
 $kit = Join-Path $dist "SonarSniffer-Setup-kit"
 $payloadZip = Join-Path $dist "SonarSniffer-Setup-payload.zip"
 $setupOut = Join-Path $dist "SonarSniffer-Setup.exe"
-$tauriDir = Join-Path $RepoRoot "sonarsniffer\desktop\src-tauri"
-$ssDir = Join-Path $RepoRoot "sonarsniffer"
-$bootstrapDir = Join-Path $RepoRoot "sonarsniffer\setup-bootstrap"
+
+# Support both the old monorepo layout ($RepoRoot/sonarsniffer/...) and the
+# standalone SonarSniffer repo layout ($RepoRoot/...).
+$standaloneTauriDir = Join-Path $RepoRoot "desktop\src-tauri"
+$monorepoTauriDir = Join-Path $RepoRoot "sonarsniffer\desktop\src-tauri"
+$tauriDir = if (Test-Path $standaloneTauriDir) { $standaloneTauriDir } else { $monorepoTauriDir }
+
+$standaloneRoot = if (Test-Path (Join-Path $RepoRoot "Cargo.toml")) { $RepoRoot } else { "" }
+$monorepoRoot = Join-Path $RepoRoot "sonarsniffer"
+$ssDir = if ($standaloneRoot) { $standaloneRoot } else { $monorepoRoot }
+
+$standaloneBootstrapDir = Join-Path $RepoRoot "setup-bootstrap"
+$monorepoBootstrapDir = Join-Path $RepoRoot "sonarsniffer\setup-bootstrap"
+$bootstrapDir = if (Test-Path $standaloneBootstrapDir) { $standaloneBootstrapDir } else { $monorepoBootstrapDir }
+
 $installScript = Join-Path $RepoRoot "scripts\install_sonarsniffer_full.ps1"
 
 function Write-Step($m) { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
@@ -66,12 +78,14 @@ foreach ($name in @("sonarsniffer-cli.exe", "parse_cli.exe")) {
         Copy-Item $src (Join-Path $kit $name) -Force
         Write-Host "  + $name"
     } else {
-        Write-Host "  WARN missing $src — run: cd sonarsniffer && cargo build --release" -ForegroundColor Yellow
+        Write-Host "  WARN missing $src — run: cargo build --release --no-default-features --bin sonarsniffer-cli --bin parse_cli" -ForegroundColor Yellow
     }
 }
 
 # MSI from Tauri bundle
-$msiDir = Join-Path $tauriDir "target\release\bundle\msi"
+$workspaceMsiDir = Join-Path $RepoRoot "target\release\bundle\msi"
+$tauriMsiDir = Join-Path $tauriDir "target\release\bundle\msi"
+$msiDir = if (Test-Path $workspaceMsiDir) { $workspaceMsiDir } else { $tauriMsiDir }
 if (Test-Path $msiDir) {
     Get-ChildItem $msiDir -Filter "*.msi" | ForEach-Object {
         Copy-Item $_.FullName $kit -Force
@@ -82,7 +96,9 @@ if (Test-Path $msiDir) {
 }
 
 # Portable desktop exe (if built without MSI)
-$nsisDir = Join-Path $tauriDir "target\release\bundle\nsis"
+$workspaceNsisDir = Join-Path $RepoRoot "target\release\bundle\nsis"
+$tauriNsisDir = Join-Path $tauriDir "target\release\bundle\nsis"
+$nsisDir = if (Test-Path $workspaceNsisDir) { $workspaceNsisDir } else { $tauriNsisDir }
 if (Test-Path $nsisDir) {
     $portable = Get-ChildItem $nsisDir -Recurse -Filter "SonarSniffer.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($portable) {
@@ -92,7 +108,9 @@ if (Test-Path $nsisDir) {
 }
 
 # UI assets (optional, for portable)
-$ui = Join-Path $RepoRoot "sonarsniffer\desktop\ui"
+$standaloneUi = Join-Path $RepoRoot "desktop\ui"
+$monorepoUi = Join-Path $RepoRoot "sonarsniffer\desktop\ui"
+$ui = if (Test-Path $standaloneUi) { $standaloneUi } else { $monorepoUi }
 if (Test-Path $ui) {
     Copy-Item $ui (Join-Path $kit "ui") -Recurse -Force
     Write-Host "  + ui/"
