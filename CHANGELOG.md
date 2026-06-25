@@ -1,5 +1,13 @@
 # SonarSniffer changelog
 
+## 0.8.17 — 2026-06-24
+
+### Repository cleanup / release rebuild
+
+- Remove accidentally committed setup-bootstrap build artifacts from the release branch.
+- Align Cargo/Tauri package versions and lockfile state for the cleaned GitHub Actions release.
+- Tag `v0.8.17` triggers GitHub Actions Windows/macOS release build.
+
 ## 0.8.16 — 2026-06-14
 
 ### Windows installer (winget / WebView2 hardening)
