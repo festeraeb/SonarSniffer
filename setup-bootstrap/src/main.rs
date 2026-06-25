@@ -146,7 +146,7 @@ for ($attempt = 1; $attempt -le $max; $attempt++) {{
     exit $p.ExitCode
   }}
   try {{ $p.Kill() }} catch {{}}
-  Log "UAC attempt $attempt timed out after ${timeoutSec}s"
+  Log "UAC attempt $attempt timed out after ${{timeoutSec}}s"
   if ($attempt -lt $max) {{
     $choice = Read-Host '[R] Retry elevation / [C] Cancel'
     if ($choice -match '^[Cc]') {{ exit 1 }}

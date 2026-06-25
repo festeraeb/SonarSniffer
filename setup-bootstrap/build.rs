@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(embed_payload)");
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
     let out = Path::new(&out_dir);
 

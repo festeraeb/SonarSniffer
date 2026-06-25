@@ -1,5 +1,13 @@
 # SonarSniffer changelog
 
+## 0.8.19 — 2026-06-24
+
+### Windows setup bootstrap
+
+- Fix Rust `format!` escaping in the elevated PowerShell launcher (`${timeoutSec}`).
+- Declare `embed_payload` cfg in setup-bootstrap `build.rs` for current Rust check-cfg.
+- Tag `v0.8.19` triggers the release rebuild.
+
 ## 0.8.18 — 2026-06-24
 
 ### Release CI / standalone packaging
