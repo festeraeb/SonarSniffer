@@ -1,5 +1,13 @@
 # SonarSniffer changelog
 
+## 0.8.18 — 2026-06-24
+
+### Release CI / standalone packaging
+
+- Retry transient Windows CLI cargo dependency downloads in release CI.
+- Make `pack_sonarsniffer_windows_setup.ps1` work in the standalone SonarSniffer repo as well as the legacy monorepo layout.
+- Tag `v0.8.18` triggers the cleaned GitHub Actions Windows/macOS release build.
+
 ## 0.8.17 — 2026-06-24
 
 ### Repository cleanup / release rebuild
