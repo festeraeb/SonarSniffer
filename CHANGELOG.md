@@ -1,5 +1,17 @@
 # SonarSniffer changelog
 
+## 0.8.20 — 2026-07-11
+
+### Standalone product scope
+
+- Add `tools/verify_standalone_repo.sh` and `docs/REPO_SCOPE.md` — SonarSniffer + SoundTiles only; no monorepo pollution.
+- Remove legacy `rust-garmin-rsd-cli/` duplicate tree (parser lives in `src/`).
+- Decouple installer from hardcoded CesarOps/nautivecs endpoints (opt-in via env vars).
+- Optional local Ollama install assist (`SONARSNIFFER_INSTALL_ASSIST=1`); no cloud tunnel or remote PowerShell.
+- WASM build prep: `wasm32` cfg gates, `scripts/build_wasm.sh`, `src/wasm_api.rs`.
+- CI release workflow runs standalone layout verification before desktop build.
+- Branches: `master` (release), `wasm` (experimental), `ip` (local install assist).
+
 ## 0.8.19 — 2026-06-24
 
 ### Windows setup bootstrap

@@ -2,7 +2,7 @@
 
 [package]
 name = "sonarsniffer-setup"
-version = "0.8.19"
+version = "0.8.20"
 edition = "2021"
 description = "Single-file SonarSniffer Windows setup launcher (extract + PowerShell install)"
 
