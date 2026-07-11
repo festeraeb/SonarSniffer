@@ -62,6 +62,11 @@ if (Test-Path $moduleSrc) {
     New-Item -ItemType Directory -Force -Path $libDir | Out-Null
     Copy-Item $moduleSrc (Join-Path $libDir "SonarSniffer.Install.psm1") -Force
     Write-Host "  + lib\SonarSniffer.Install.psm1"
+    $assistSrc = Join-Path $RepoRoot "scripts\lib\SonarSniffer.InstallAssist.psm1"
+    if (Test-Path $assistSrc) {
+        Copy-Item $assistSrc (Join-Path $libDir "SonarSniffer.InstallAssist.psm1") -Force
+        Write-Host "  + lib\SonarSniffer.InstallAssist.psm1"
+    }
 } else {
     Write-Host "  WARN missing $moduleSrc" -ForegroundColor Yellow
 }

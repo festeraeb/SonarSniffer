@@ -11,7 +11,7 @@
   the repo (git clone, USB, or copy from c2).
 
 .EXAMPLE
-  cd C:\path\to\wreckhunter2000-1
+  cd C:\path\to\SonarSniffer
   .\scripts\build_sonarsniffer_desktop_msi_windows.ps1
 
 .EXAMPLE

@@ -37,6 +37,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify standalone SonarSniffer layout
+        shell: bash
+        run: ./tools/verify_standalone_repo.sh
       - name: Verify single-crate desktop layout
         shell: pwsh
         run: ./tools/verify_no_mirror.ps1

@@ -29,6 +29,18 @@ if (-not (Test-Path -LiteralPath $ModulePath)) {
 }
 Import-Module $ModulePath -Force
 
+$AssistModulePath = Join-Path (Split-Path $MyInvocation.MyCommand.Path -Parent) "lib\SonarSniffer.InstallAssist.psm1"
+if (Test-Path -LiteralPath $AssistModulePath) {
+    Import-Module $AssistModulePath -Force
+}
+
+function Invoke-InstallAssistOnFailure {
+    param([string]$Phase = 'install')
+    if (Get-Command Invoke-LocalInstallAssist -ErrorAction SilentlyContinue) {
+        Invoke-LocalInstallAssist -LogPath $Script:InstallLogPath -Phase $Phase | Out-Null
+    }
+}
+
 function Write-Step($m) {
     Write-InstallLog $m
     Write-Host "`n=== $m ===" -ForegroundColor Cyan
@@ -171,5 +183,7 @@ Pass "SonarSniffer install finished"
 Write-Host ""
 Write-Host "Launch desktop app from Start Menu or run:" -ForegroundColor Gray
 if ($desktopExe) { Write-Host "  $desktopExe" }
+
+Invoke-InstallAssistOnFailure -Phase 'success'
 
 Read-Host "`nPress Enter to close"

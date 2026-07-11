@@ -33,10 +33,17 @@ pub mod license;
 mod video;
 mod video_enhanced;
 mod mp4_av1;
+#[cfg(not(target_arch = "wasm32"))]
 mod corpus_scan;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod deps;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod host_profile;
+#[cfg(not(target_arch = "wasm32"))]
 mod static_server;
+
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_api;
 
 #[cfg(all(not(debug_assertions), target_os = "linux", feature = "jemalloc"))]
 #[global_allocator]

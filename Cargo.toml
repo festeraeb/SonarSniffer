@@ -12,6 +12,8 @@ edition = "2021"
 [lib]
 name = "sonarsniffer_lib"
 path = "src/lib.rs"
+# cdylib needed for wasm-pack; rlib for native consumers.
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "sonarsniffer-cli"
@@ -27,30 +29,41 @@ serde_json = "1"
 anyhow = "1"
 thiserror = "2"
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
 sha2 = "0.10"
 ndarray = "0.16"
 base64 = "0.22"
-rayon = "1"
-crossbeam = "0.8"
-flume = "0.12"
 gif = "0.13"
-clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Bundled full-precision FDCT — internal nauticuvs-full only (never crates.io).
 nauticuvs = { path = "./nauticuvs", package = "nauticuvs-full" }
 
 # Pure-Rust AV1 video encoder (no system libs, no pkg-config, no NASM).
-# default-features=false disables the `asm` feature so the build stays 100%
-# Rust on every CI runner. MP4 muxing is hand-written in src/mp4_av1.rs.
 rav1e = { version = "0.7", default-features = false }
 
 # MBTiles output
 mbtiles = "0.15"
+
+# ── Native-only dependencies ───────────────────────────────────────────────────
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+rayon = "1"
+crossbeam = "0.8"
+flume = "0.12"
+clap = { version = "4", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# ── WASM-only dependencies ────────────────────────────────────────────────────
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console", "Blob", "Url", "Window", "Performance"] }
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
+chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
+sqlite-wasm-rs = "0.5.5"
 
 # Optional legacy H.264 path (default export uses built-in rav1e AV1).
 [dependencies.gstreamer]

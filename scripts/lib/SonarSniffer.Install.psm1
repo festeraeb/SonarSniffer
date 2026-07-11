@@ -6,10 +6,12 @@ $localRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME
 $Script:InstallLogPath = Join-Path $tempRoot 'SonarSniffer-install.log'
 $Script:WebView2ClientGuid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
 $Script:TelemetryConsentPath = Join-Path $localRoot 'SonarSniffer\telemetry_consent.json'
-$Script:DefaultTelemetryUrl = 'https://telemetry.cesarops.io/v1/sonarsniffer/logs'
-$Script:DefaultNautivecsUrl = if ($env:CESAROPS_NAUTIVECS_URL) { $env:CESAROPS_NAUTIVECS_URL } else { 'http://10.0.0.61:5003' }
+# Optional telemetry — only sent when user has consented (see Get-TelemetryConsent).
+$Script:DefaultTelemetryUrl = if ($env:SONARSNIFFER_TELEMETRY_URL) { $env:SONARSNIFFER_TELEMETRY_URL } else { '' }
+# Optional fleet error ingest — disabled unless SONARSNIFFER_ERROR_REPORT_URL is set.
+$Script:DefaultNautivecsUrl = $env:SONARSNIFFER_ERROR_REPORT_URL
 
-# Common install failure codes for nautivecs / fleet RAG
+# Common install failure codes (logged locally; optional remote report if URL configured)
 $Script:InstallErrorCatalog = @{
     'winget-missing'       = 'winget not on PATH — install App Installer from Microsoft Store'
     'winget-timeout'       = 'winget job exceeded timeout (often store/agreement/network stall)'
@@ -253,7 +255,12 @@ function Write-NautivecsInstallError {
         "log: $Script:InstallLogPath"
     ) -join "`n"
 
-    Write-InstallLog "nautivecs ingest ($ErrorCode): $Message" -Level ERROR
+    Write-InstallLog "install error ($ErrorCode): $Message" -Level ERROR
+
+    if (-not $NautivecsUrl) {
+        Write-InstallLog 'remote error report disabled (set SONARSNIFFER_ERROR_REPORT_URL to enable)'
+        return $false
+    }
 
     try {
         $body = @{
@@ -265,10 +272,10 @@ function Write-NautivecsInstallError {
 
         Invoke-RestMethod -Method Post -Uri "$NautivecsUrl/add" -Body $body `
             -ContentType 'application/json' -TimeoutSec 8 | Out-Null
-        Write-InstallLog "nautivecs add OK ($ErrorCode)"
+        Write-InstallLog "error report sent ($ErrorCode)"
         return $true
     } catch {
-        Write-InstallLog "nautivecs add failed (offline?): $_" -Level WARN
+        Write-InstallLog "error report failed (offline?): $_" -Level WARN
         return $false
     }
 }
@@ -413,6 +420,12 @@ function Send-TelemetryIfConsented {
         return $false
     }
 
+    $uri = if ($consent.endpoint) { [string]$consent.endpoint } elseif ($TelemetryUrl) { $TelemetryUrl } else { '' }
+    if (-not $uri) {
+        Write-InstallLog "Telemetry skipped (no endpoint configured): $Step"
+        return $false
+    }
+
     $payload = [ordered]@{
         session_id      = $consent.session_id
         step            = $Step
@@ -425,7 +438,6 @@ function Send-TelemetryIfConsented {
     }
 
     try {
-        $uri = if ($consent.endpoint) { [string]$consent.endpoint } else { $TelemetryUrl }
         Invoke-RestMethod -Method Post -Uri $uri -Body ($payload | ConvertTo-Json -Compress) `
             -ContentType 'application/json' -TimeoutSec 15 | Out-Null
         Write-InstallLog "Telemetry sent: $Step"
