@@ -9,7 +9,8 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.sonarsniffer-build/target}"
 
 cd "$REPO_ROOT"
 TRIPLE="$(rustc --print host-tuple)"
-echo "Building CLI sidecars ($PROFILE) -> $CARGO_TARGET_DIR ($TRIPLE)"
+echo "Building CLI sidecars ($PROFILE --no-default-features) -> $CARGO_TARGET_DIR ($TRIPLE)"
+echo "See docs/BUILD_FLAGS.md"
 cargo build --"$PROFILE" --no-default-features --bin sonarsniffer-cli --bin parse_cli
 cargo build --"$PROFILE" -p soundtiles --bin soundtiles
 

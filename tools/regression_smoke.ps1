@@ -26,9 +26,10 @@ if (-not $Exe) {
 }
 
 if (-not $SkipBuild -and -not (Test-Path $Exe)) {
-    Write-Host "Building parse_cli..."
+    Write-Host "Building parse_cli (release --no-default-features)..."
     Push-Location $RepoRoot
-    cargo build --release --bin parse_cli
+    cargo build --release --no-default-features --bin parse_cli
+    if ($LASTEXITCODE -ne 0) { throw "cargo build parse_cli failed" }
     Pop-Location
 }
 

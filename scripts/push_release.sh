@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SONAR_CLONE="${SONAR_CLONE:-/home/cesarops/repos/SonarSniffer}"
-VERSION="${1:-0.8.20}"
+VERSION="${1:-0.8.21}"
 TAG="v${VERSION}"
 GITHUB_USER="${GITHUB_USER:-festeraeb}"
 GITHUB_REPO="${GITHUB_REPO:-festeraeb/SonarSniffer}"

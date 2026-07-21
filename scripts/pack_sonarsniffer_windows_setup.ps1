@@ -4,9 +4,13 @@
   Pack Tauri desktop + CLI + install script into one SonarSniffer-Setup.exe.
 
 .DESCRIPTION
-  Run on native Windows AFTER building:
-    1. sonarsniffer CLI:  cargo build --release (in sonarsniffer/)
-    2. desktop MSI:      scripts/build_sonarsniffer_desktop_msi_windows.ps1
+  Run on native Windows AFTER building with production flags (docs/BUILD_FLAGS.md):
+    1. CLI:  cargo build --release --no-default-features --bin sonarsniffer-cli --bin parse_cli
+       (or tools/stage_tauri_sidecars.ps1)
+    2. desktop MSI/NSIS: scripts/build_sonarsniffer_desktop_msi_windows.ps1
+
+  Packs install_sonarsniffer_full.ps1 + SonarSniffer.Install.psm1 + optional
+  SonarSniffer.InstallAssist.psm1 (ip / LLM self-heal when SONARSNIFFER_INSTALL_ASSIST=1).
 
   Output: dist/SonarSniffer-Setup.exe  (single file — double-click to install)
 

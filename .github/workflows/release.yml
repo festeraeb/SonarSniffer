@@ -11,12 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build CLI binaries
+      - name: Build CLI binaries (release --no-default-features)
         shell: pwsh
         run: |
+          # Production flags: docs/BUILD_FLAGS.md
           $max = 3
           for ($i = 1; $i -le $max; $i++) {
-            Write-Host "cargo build attempt $i/$max"
+            Write-Host "cargo build attempt $i/$max (--release --no-default-features)"
             cargo build --release --no-default-features --bin sonarsniffer-cli --bin parse_cli
             if ($LASTEXITCODE -eq 0) { exit 0 }
             if ($i -lt $max) { Start-Sleep -Seconds 30 }

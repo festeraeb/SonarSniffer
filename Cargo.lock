@@ -2185,15 +2185,6 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
-dependencies = [
- "foldhash 0.2.0",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
@@ -4449,16 +4440,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsqlite-vfs"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
-dependencies = [
- "hashbrown 0.16.1",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "rusqlite"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4968,7 +4949,7 @@ dependencies = [
 
 [[package]]
 name = "sonarsniffer"
-version = "0.8.19"
+version = "0.8.21"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4993,7 +4974,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "sqlite-wasm-rs",
  "thiserror 2.0.18",
  "tikv-jemallocator",
  "tracing",
@@ -5082,18 +5062,6 @@ dependencies = [
  "hex",
  "md-5",
  "rusqlite",
-]
-
-[[package]]
-name = "sqlite-wasm-rs"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc3efc0da82635d7e1ced0053bbbfa8c7ab9645d0bf36ceb4f7127bb85315d75"
-dependencies = [
- "cc",
- "js-sys",
- "rsqlite-vfs",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -5538,7 +5506,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-appsonarsniffer"
-version = "0.8.19"
+version = "0.8.21"
 dependencies = [
  "rfd",
  "serde",

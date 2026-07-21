@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "sonarsniffer"
-version = "0.8.20"
+version = "0.8.21"
 description = "SonarSniffer by NautiDog — Professional Marine Survey Analysis"
 authors = ["NautiDog Sailing"]
 edition = "2021"
@@ -23,47 +23,15 @@ path = "src/bin/probe_cli.rs"
 name = "parse_cli"
 path = "src/bin/parse_cli.rs"
 
+# Shared deps that compile on native + wasm.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 thiserror = "2"
-image = { version = "0.25", default-features = false, features = ["png", "webp"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
-ndarray = "0.16"
 base64 = "0.22"
-gif = "0.13"
 tracing = "0.1"
-
-# Bundled full-precision FDCT — internal nauticuvs-full only (never crates.io).
-nauticuvs = { path = "./nauticuvs", package = "nauticuvs-full" }
-
-# Pure-Rust AV1 video encoder (no system libs, no pkg-config, no NASM).
-rav1e = { version = "0.7", default-features = false }
-
-# MBTiles output
-mbtiles = "0.15"
-
-# ── Native-only dependencies ───────────────────────────────────────────────────
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
-rayon = "1"
-crossbeam = "0.8"
-flume = "0.12"
-clap = { version = "4", features = ["derive"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# ── WASM-only dependencies ────────────────────────────────────────────────────
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
-js-sys = "0.3"
-web-sys = { version = "0.3", features = ["console", "Blob", "Url", "Window", "Performance"] }
-console_error_panic_hook = "0.1"
-getrandom = { version = "0.2", features = ["js"] }
-chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
-sqlite-wasm-rs = "0.5.5"
 
 # Optional legacy H.264 path (default export uses built-in rav1e AV1).
 [dependencies.gstreamer]
@@ -80,6 +48,9 @@ version = "0.93"
 features = ["features2d", "calib3d"]
 optional = true
 
+# Feature inventory + production flag matrix: docs/BUILD_FLAGS.md
+# Release/CI: cargo build --release --no-default-features
+# WASM: wasm-pack --release --no-default-features (native-heavy deps excluded by target cfg)
 [features]
 default = []
 video-gstreamer = ["dep:gstreamer", "dep:gstreamer-app"]
@@ -87,5 +58,34 @@ soundtiles = ["dep:opencv"]
 full-license = []
 jemalloc = ["dep:tikv-jemallocator"]
 
+# ── Native-only dependencies ───────────────────────────────────────────────────
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "webp"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+ndarray = "0.16"
+gif = "0.13"
+# Bundled full-precision FDCT — internal nauticuvs-full only (never crates.io).
+nauticuvs = { path = "./nauticuvs", package = "nauticuvs-full" }
+# Pure-Rust AV1 video encoder (no system libs, no pkg-config, no NASM).
+rav1e = { version = "0.7", default-features = false }
+# MBTiles helper crate (pulls sqlx/tokio — must stay native-only).
+mbtiles = "0.15"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+rayon = "1"
+crossbeam = "0.8"
+flume = "0.12"
+clap = { version = "4", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 [target.'cfg(all(any(target_os = "linux"), not(target_env = "msvc")))'.dependencies]
 tikv-jemallocator = { version = "0.6", optional = true }
+
+# ── WASM-only dependencies ────────────────────────────────────────────────────
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console", "Blob", "Url", "Window", "Performance"] }
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
+chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }

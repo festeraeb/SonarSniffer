@@ -16,10 +16,14 @@ This verifies the repo layout, builds CLI + desktop, stages Tauri sidecars, and 
 | Script | Purpose |
 |--------|---------|
 | `publish.ps1` | Full pre-release gate (layout check, build, stage, regression) |
+| `prod_cargo_build.sh` | Linux/macOS production CLI (`--release --no-default-features`) |
+| `smoke_release.sh` | Full run-through on production-flagged binaries |
 | `verify_no_mirror.ps1` | Fail if duplicated library `.rs` files appear under `desktop/src-tauri/src/` |
 | `stage_tauri_sidecars.ps1` | Copy `parse_cli` + `sonarsniffer-cli` into Tauri `binaries/` |
 | `stage_tauri_sidecars.sh` | Same for Linux/macOS CI |
 | `regression_smoke.ps1` | Millers / Holloway / Sonar010 mosaic smoke test (`-Fast` for host-tuned quick run) |
+
+Feature / flag policy: [docs/BUILD_FLAGS.md](../docs/BUILD_FLAGS.md).
 
 ## Build output directory
 

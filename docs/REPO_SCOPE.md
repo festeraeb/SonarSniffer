@@ -27,6 +27,8 @@ Do **not** add or sync from the CesarOps / wreckhunter monorepo:
 |--------|---------|
 | `master` | Native desktop + CLI installers (primary release line) |
 | `wasm` | Browser WASM build (`wasm-pack`) — experimental |
-| `ip` | Installer with optional **local** Ollama assist — experimental |
+| `ip` | Installer with optional **local** Ollama assist + packed self-heal — experimental |
+
+Build flag matrix: [BUILD_FLAGS.md](BUILD_FLAGS.md).
 
 Run `tools/verify_standalone_repo.sh` before tagging a release.

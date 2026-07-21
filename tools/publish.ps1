@@ -31,22 +31,22 @@ try {
     & (Join-Path $PSScriptRoot "verify_no_mirror.ps1") -RepoRoot $RepoRoot
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    Write-Host "[2/5] cargo check (library + CLI)..." -ForegroundColor Yellow
+    Write-Host "[2/5] cargo check (library + CLI, --no-default-features)..." -ForegroundColor Yellow
     if ($Release) {
-        Invoke-Cargo check --release -p sonarsniffer --bins
+        Invoke-Cargo check --release --no-default-features -p sonarsniffer --bins
     } else {
-        Invoke-Cargo check -p sonarsniffer --bins
+        Invoke-Cargo check --no-default-features -p sonarsniffer --bins
     }
 
-    Write-Host "[3/5] cargo test (library)..." -ForegroundColor Yellow
-    Invoke-Cargo test -p sonarsniffer --lib
+    Write-Host "[3/5] cargo test (library, --no-default-features)..." -ForegroundColor Yellow
+    Invoke-Cargo test --no-default-features -p sonarsniffer --lib
 
     if (-not $SkipDesktop) {
         Write-Host "[4/5] cargo check (desktop)..." -ForegroundColor Yellow
         if ($Release) {
-            Invoke-Cargo check --release -p tauri-appsonarsniffer
+            Invoke-Cargo check --release --no-default-features -p tauri-appsonarsniffer
         } else {
-            Invoke-Cargo check -p tauri-appsonarsniffer
+            Invoke-Cargo check --no-default-features -p tauri-appsonarsniffer
         }
 
         Write-Host "[5/5] Stage Tauri sidecars..." -ForegroundColor Yellow

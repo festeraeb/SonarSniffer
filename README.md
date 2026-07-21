@@ -116,12 +116,24 @@ GStreamer is **optional** — only if you build with `--features video-gstreamer
 
 ### CLI
 
+Production flags are documented in [docs/BUILD_FLAGS.md](docs/BUILD_FLAGS.md)
+(`--release --no-default-features`; optional Linux `--features jemalloc`).
+
 ```bash
 git clone https://github.com/festeraeb/SonarSniffer.git
 cd SonarSniffer
+# preferred helper (sets CARGO_TARGET_DIR=/data/cargo-target when present):
+bash tools/prod_cargo_build.sh
+# or:
 cargo build --release --no-default-features --bin sonarsniffer-cli --bin parse_cli
-# binaries: target/release/sonarsniffer-cli, target/release/parse_cli
+# binaries: $CARGO_TARGET_DIR/release/sonarsniffer-cli, parse_cli
 ```
+
+| Branch | Build |
+|--------|--------|
+| `master` | `tools/prod_cargo_build.sh` / release CI |
+| `wasm` | `scripts/build_wasm.sh` (`wasm-pack --release --no-default-features`) |
+| `ip` | same Cargo flags as master + packed InstallAssist (LLM/self-heal) |
 
 ### Desktop app
 

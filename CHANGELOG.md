@@ -1,5 +1,16 @@
 # SonarSniffer changelog
 
+## 0.8.21 — 2026-07-21
+
+### Build flags + install hardening
+
+- Document Cargo/feature matrix in `docs/BUILD_FLAGS.md`; wire production flags through install/build helpers.
+- `tools/prod_cargo_build.sh` + `tools/smoke_release.sh` — release `--no-default-features` build and full CLI run-through.
+- WASM: `scripts/build_wasm.sh` now uses `wasm-pack --release --no-default-features`.
+- Windows desktop MSI script aligned to standalone layout; production default has no `video-gstreamer` (use `-LegacyGStreamer` for H.264 SKU).
+- `ip` InstallAssist: deterministic self-heal hints when Ollama is down; still packed into Setup.exe.
+- Publish/regression tools always pass `--no-default-features` for release-shaped builds.
+
 ## 0.8.20 — 2026-07-11
 
 ### Standalone product scope

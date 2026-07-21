@@ -2,8 +2,24 @@
 
 Browser build of SonarSniffer core. **Same repo scope** as `master` — no monorepo files.
 
+Production flags (see [BUILD_FLAGS.md](BUILD_FLAGS.md)):
+
 ```bash
 ./tools/verify_standalone_repo.sh
+./scripts/build_wasm.sh
+# → wasm-pack build --target web --release --no-default-features
+```
+
+| Flag | Role |
+|------|------|
+| `--release` | Optimized wasm (not debug) |
+| `--no-default-features` | No GStreamer/OpenCV; matches native product surface |
+| `--target web` | Browser bindings |
+
+Optional experimental (not used by default):
+
+```bash
+export RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
 ./scripts/build_wasm.sh
 ```
 
