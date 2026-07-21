@@ -1,5 +1,13 @@
 # SonarSniffer changelog
 
+## 0.8.22 — 2026-07-21
+
+### Windows desktop binary name
+
+- Set Tauri 2 `mainBinaryName` to `SonarSniffer` so MSI/NSIS ship `SonarSniffer.exe` (not only `tauri-appsonarsniffer.exe`).
+- Installer creates a `SonarSniffer.exe` alias + retargets Start Menu/Desktop shortcuts when an older MSI still drops the crate-named binary.
+- Treat msiexec exit `3010` (reboot deferred) as success; warn about stale portable `0.77.5` under `%LOCALAPPDATA%\Programs\SonarSniffer\`.
+
 ## 0.8.21 — 2026-07-21
 
 ### Build flags + install hardening

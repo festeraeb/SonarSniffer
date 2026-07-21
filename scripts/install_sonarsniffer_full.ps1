@@ -147,11 +147,47 @@ if ($msi -and -not $PortableOnly) {
     Write-Step "Installing MSI"
     Write-Host "  $msi"
     $code = (Start-Process msiexec.exe -ArgumentList "/i", "`"$msi`"", "/passive", "/norestart" -Wait -PassThru).ExitCode
-    if ($code -ne 0) {
+    # 3010 = success but reboot required (deferred); treat as OK for install verification
+    if ($code -ne 0 -and $code -ne 3010) {
         Write-NautivecsInstallError -ErrorCode 'msi-failed' -Message "msiexec exit $code"
         Fail "MSI failed with exit code $code"
     }
+    if ($code -eq 3010) {
+        Warn "MSI requested a reboot (exit 3010) — app files are installed; reboot later if drivers/webview need it"
+    }
     Pass "Desktop app installed via MSI"
+
+    # Tauri 2 ships crate name (tauri-appsonarsniffer.exe) unless mainBinaryName is set.
+    # Ensure a SonarSniffer.exe next to it and point common shortcuts at it.
+    $msiDir = Join-Path $env:LOCALAPPDATA "SonarSniffer"
+    $msiTauri = Join-Path $msiDir "tauri-appsonarsniffer.exe"
+    $msiNamed = Join-Path $msiDir "SonarSniffer.exe"
+    if ((Test-Path -LiteralPath $msiTauri) -and -not (Test-Path -LiteralPath $msiNamed)) {
+        Copy-Item -LiteralPath $msiTauri -Destination $msiNamed -Force
+        Pass "Created SonarSniffer.exe alias beside MSI binary"
+    }
+    if (Test-Path -LiteralPath $msiNamed) {
+        $desktopExe = $msiNamed
+        try {
+            $sh = New-Object -ComObject WScript.Shell
+            foreach ($lnkPath in @(
+                    (Join-Path $env:USERPROFILE "Desktop\SonarSniffer.lnk"),
+                    (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\SonarSniffer.lnk"),
+                    (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\SonarSniffer\SonarSniffer.lnk")
+                )) {
+                if (-not (Test-Path -LiteralPath $lnkPath)) { continue }
+                $l = $sh.CreateShortcut($lnkPath)
+                $l.TargetPath = $msiNamed
+                $l.WorkingDirectory = $msiDir
+                $l.Save()
+            }
+        } catch {
+            Warn "Could not retarget shortcuts to SonarSniffer.exe: $_"
+        }
+    } elseif (Test-Path -LiteralPath $msiTauri) {
+        $desktopExe = $msiTauri
+        Warn "Installed as tauri-appsonarsniffer.exe — rebuild with mainBinaryName=SonarSniffer"
+    }
 }
 elseif ($desktopExe) {
     Write-Step "Portable install (no MSI in kit)"
@@ -172,6 +208,12 @@ elseif ($desktopExe) {
 else {
     Write-NautivecsInstallError -ErrorCode 'kit-incomplete' -Message 'Missing MSI and desktop exe'
     Fail "Kit missing MSI and desktop exe. Rebuild with scripts/pack_sonarsniffer_windows_setup.ps1"
+}
+
+$stalePortable = Join-Path $env:LOCALAPPDATA "Programs\SonarSniffer\SonarSniffer.exe"
+if (Test-Path -LiteralPath $stalePortable) {
+    $staleVer = (Get-Item -LiteralPath $stalePortable).VersionInfo.ProductVersion
+    Warn "Stale portable SonarSniffer.exe still at $stalePortable (ver $staleVer) — prefer Start Menu / %LOCALAPPDATA%\SonarSniffer\SonarSniffer.exe"
 }
 
 Write-Step "CLI tools"

@@ -105,15 +105,24 @@ if (Test-Path $msiDir) {
 }
 
 # Portable desktop exe (if built without MSI)
+# Tauri 2 defaults to crate name tauri-appsonarsniffer.exe unless mainBinaryName=SonarSniffer.
 $workspaceNsisDir = Join-Path $RepoRoot "target\release\bundle\nsis"
 $tauriNsisDir = Join-Path $tauriDir "target\release\bundle\nsis"
 $nsisDir = if (Test-Path $workspaceNsisDir) { $workspaceNsisDir } else { $tauriNsisDir }
-if (Test-Path $nsisDir) {
-    $portable = Get-ChildItem $nsisDir -Recurse -Filter "SonarSniffer.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($portable) {
-        Copy-Item $portable.FullName (Join-Path $kit "SonarSniffer.exe") -Force
-        Write-Host "  + SonarSniffer.exe (from NSIS tree)"
+$workspaceReleaseDir = Join-Path $RepoRoot "target\release"
+$tauriReleaseDir = Join-Path $tauriDir "target\release"
+$portable = $null
+foreach ($root in @($nsisDir, $workspaceReleaseDir, $tauriReleaseDir)) {
+    if (-not (Test-Path $root)) { continue }
+    foreach ($name in @("SonarSniffer.exe", "tauri-appsonarsniffer.exe")) {
+        $hit = Get-ChildItem $root -Recurse -Filter $name -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($hit) { $portable = $hit; break }
     }
+    if ($portable) { break }
+}
+if ($portable) {
+    Copy-Item $portable.FullName (Join-Path $kit "SonarSniffer.exe") -Force
+    Write-Host "  + SonarSniffer.exe (from $($portable.FullName))"
 }
 
 # UI assets (optional, for portable)

@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "sonarsniffer"
-version = "0.8.21"
+version = "0.8.22"
 description = "SonarSniffer by NautiDog — Professional Marine Survey Analysis"
 authors = ["NautiDog Sailing"]
 edition = "2021"
