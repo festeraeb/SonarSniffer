@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::healing_api;
 
 const MAGIC_REC_HDR: u32 = 0xB7E9DA86;
@@ -258,14 +259,23 @@ impl GarminRSDParser {
                 return ParseResult::empty_with_error(format!("Failed to read file: {err}"));
             }
         };
+        self.parse_bytes(bytes, Some(path))
+    }
 
+    /// Parse RSD data already in memory.  Pass `path` if you have one so
+    /// the optional `garmin_magic_variants.txt` lookup works; pass `None`
+    /// in the WASM/browser path where there's no filesystem.
+    pub fn parse_bytes(&mut self, bytes: Vec<u8>, path: Option<&Path>) -> ParseResult {
         if bytes.len() < 16 {
             return ParseResult::empty_with_error(
                 "Input appears too small to contain sonar records.",
             );
         }
 
-        let magic_candidates = load_magic_candidates(path);
+        let magic_candidates = match path {
+            Some(p) => load_magic_candidates(p),
+            None => default_magic_candidates(),
+        };
         let mut cursor = 0usize;
         let mut pings = Vec::new();
         let mut recovered_records = 0usize;
@@ -417,6 +427,7 @@ impl GarminRSDParser {
         }
 
         // Record a healing discovery if generation heuristics were used
+        #[cfg(not(target_arch = "wasm32"))]
         if generation == RsdGeneration::Unknown || mismatch_rate > 0.05 {
             let fingerprint = healing_api::compute_file_fingerprint(&bytes);
             let magic_val = le_u32(&bytes[scan_pos..scan_pos.saturating_add(4)]).unwrap_or(0);
@@ -965,6 +976,26 @@ pub struct FileProbe {
     pub summary: String,
 }
 
+impl FileProbe {
+    /// Minimal stand-in for a non-Garmin format probe (used by the WASM
+    /// `detect_and_parse` path where the other parsers are gated out).
+    pub fn placeholder(file_size: usize) -> Self {
+        Self {
+            file_size,
+            magic_found: None,
+            magic_offset: None,
+            header_crc_ok: false,
+            body_crc_ok: false,
+            first_channel: None,
+            first_channel_label: None,
+            first_record_fields: Vec::new(),
+            estimated_records: None,
+            preamble_channels: Vec::new(),
+            summary: format!("{} bytes (native-only format)", file_size),
+        }
+    }
+}
+
 impl GarminRSDParser {
     /// Run a fast pre-parse probe: locate the first real sonar record, validate
     /// both varstruct CRCs, and return key metadata without decoding any samples.
@@ -995,8 +1026,18 @@ impl GarminRSDParser {
                 };
             }
         };
+        self.probe_bytes(bytes, Some(path))
+    }
+
+    /// Probe RSD data already in memory.  Pass `path` if available for
+    /// the optional `garmin_magic_variants.txt` lookup; pass `None` for
+    /// the WASM/browser path.
+    pub fn probe_bytes(&self, bytes: Vec<u8>, path: Option<&Path>) -> FileProbe {
         let file_size = bytes.len();
-        let magic_candidates = load_magic_candidates(path);
+        let magic_candidates = match path {
+            Some(p) => load_magic_candidates(p),
+            None => default_magic_candidates(),
+        };
 
         // Locate the first magic anywhere in the file (used for metadata only).
         let Some(first_magic_pos) = find_next_magic(&bytes, &magic_candidates, 0, bytes.len())
@@ -1345,6 +1386,13 @@ pub(crate) enum CrcMode {
     Strict,
     #[allow(dead_code)]
     Off,
+}
+
+/// Hardcoded magic candidate list used by the in-memory (WASM / browser)
+/// parse path.  Mirrors the first four entries `load_magic_candidates` would
+/// have produced without any external `garmin_magic_variants.txt`.
+fn default_magic_candidates() -> Vec<u32> {
+    vec![MAGIC_REC_HDR, 0xB7E9DA87, 0xB7E9DA88, 0xB7E9DA89]
 }
 
 fn load_magic_candidates(path: &Path) -> Vec<u32> {

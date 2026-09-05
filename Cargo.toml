@@ -84,6 +84,8 @@ tikv-jemallocator = { version = "0.6", optional = true }
 # ── WASM-only dependencies ────────────────────────────────────────────────────
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+serde-wasm-bindgen = "0.6"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["console", "Blob", "Url", "Window", "Performance"] }
 console_error_panic_hook = "0.1"

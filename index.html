@@ -1,14 +1,112 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SonarSniffer</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="SonarSniffer by NautiDog — full-pipeline Garmin RSD parser running in your browser via WebAssembly. Drop a .RSD file to parse, profile, and inspect channels. No upload, all local.">
+  <title>SonarSniffer by NautiDog — Browser Pipeline</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
 </head>
-
 <body>
-    <div id="app"></div>
-</body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">⚓</div>
+      <div>
+        <h1>SonarSniffer <span class="byline">by NautiDog</span></h1>
+        <p class="tagline">Full Garmin RSD pipeline in your browser · WebAssembly · No upload</p>
+      </div>
+    </div>
+    <div class="meta">
+      <span class="pill" id="versionPill">v…</span>
+      <span class="pill muted" id="wasmStatus">loading WASM…</span>
+    </div>
+  </header>
 
+  <main>
+    <section class="card">
+      <h2>1 · Drop a <code>.RSD</code> file</h2>
+      <p class="muted">
+        Files are processed entirely in your browser.  No upload, no telemetry.
+        Large recordings (50+ MB) are slow in pure JS — prefer the desktop
+        build for production work.
+      </p>
+      <div id="dropZone" class="dropzone" tabindex="0">
+        <input type="file" id="fileInput" accept=".rsd,.RSD" hidden>
+        <div class="dropzone-inner">
+          <div class="big-icon" aria-hidden="true">📡</div>
+          <div>
+            <strong>Drop a Garmin .RSD file here</strong>
+            <p class="muted">…or <button type="button" id="pickFileBtn" class="link">click to choose</button></p>
+          </div>
+        </div>
+      </div>
+      <div class="file-info" id="fileInfo" hidden>
+        <code id="fileName"></code> · <span id="fileSize"></span>
+      </div>
+    </section>
+
+    <section class="card" id="progressCard" hidden>
+      <h2>2 · Pipeline</h2>
+      <ol class="pipeline" id="pipelineSteps">
+        <li data-step="load" class="active"><span class="bullet"></span>Load WASM module</li>
+        <li data-step="sniff"><span class="bullet"></span>Sniff magic bytes</li>
+        <li data-step="parse"><span class="bullet"></span>Parse records</li>
+        <li data-step="discover"><span class="bullet"></span>Profile channels</li>
+        <li data-step="render"><span class="bullet"></span>Render result</li>
+      </ol>
+      <progress id="progressBar" max="100" value="0"></progress>
+      <p class="muted small" id="progressText">Idle.</p>
+    </section>
+
+    <section class="card" id="resultCard" hidden>
+      <h2>3 · Result</h2>
+      <div class="kpis">
+        <div class="kpi"><div class="kpi-num" id="kpiRecords">—</div><div class="kpi-lbl">records</div></div>
+        <div class="kpi"><div class="kpi-num" id="kpiChannels">—</div><div class="kpi-lbl">channels</div></div>
+        <div class="kpi"><div class="kpi-num" id="kpiDiscoveryPings">—</div><div class="kpi-lbl">profile pings</div></div>
+        <div class="kpi"><div class="kpi-num" id="kpiSampleCount">—</div><div class="kpi-lbl">median samples</div></div>
+        <div class="kpi"><div class="kpi-num" id="kpiSidescanPairs">—</div><div class="kpi-lbl">sidescan pairs</div></div>
+      </div>
+    </section>
+
+    <section class="card" id="channelsCard" hidden>
+      <h2>Channels</h2>
+      <p class="muted small" id="channelsNote"></p>
+      <div class="channel-grid" id="channelGrid"></div>
+    </section>
+
+    <section class="card" id="logCard" hidden>
+      <h2>Discovery log</h2>
+      <pre class="log" id="discoveryLog"></pre>
+    </section>
+
+    <section class="card" id="waterfallCard" hidden>
+      <h2>Waterfall preview</h2>
+      <p class="muted small">
+        Click a channel above to draw the first 64 pings as a mini-waterfall.
+        Full-resolution tiles are available via <code>ping_samples()</code>.
+      </p>
+      <div class="waterfall" id="waterfall" aria-label="Mini waterfall"></div>
+    </section>
+
+    <section class="card" id="errorCard" hidden>
+      <h2>⚠ Error</h2>
+      <pre class="log error" id="errorText"></pre>
+    </section>
+  </main>
+
+  <footer>
+    <p>
+      SonarSniffer v<span id="versionFooter">…</span> ·
+      <a href="https://github.com/festeraeb/SonarSniffer">canonical repo</a> ·
+      <a href="https://nautidog.com">NautiDog Sailing</a> ·
+      <a href="https://cesarops.org">CESARops</a>
+    </p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
 </html>

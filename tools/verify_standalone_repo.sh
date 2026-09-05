@@ -8,6 +8,7 @@ cd "$ROOT"
 ALLOWED_TOP=(
   .cursor .git .gitattributes .github .gitignore .vscode
   AGENTS.md CHANGELOG.md Cargo.lock Cargo.toml README.md build.rs index.html
+  app.js styles.css
   desktop docs nauticuvs scripts setup-bootstrap soundtiles src testdata tools
   dist build-linux target bin output
 )

@@ -77,47 +77,107 @@ pub fn detect_and_parse(path: &Path) -> DetectResult {
         }
 
         SonarFormat::LowranceSL2 | SonarFormat::LowranceSL3 => {
-            let parse = crate::lowrance_parser::parse_file(path);
-            DetectResult {
-                format,
-                parse,
-                probe: placeholder_probe(path),
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let parse = crate::lowrance_parser::parse_file(path);
+                DetectResult {
+                    format,
+                    parse,
+                    probe: placeholder_probe(path),
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = path;
+                DetectResult {
+                    format,
+                    parse: ParseResult::empty_with_error("Lowrance parsing is native-only"),
+                    probe: FileProbe::placeholder(0),
+                }
             }
         }
 
         SonarFormat::Humminbird => {
-            let parse = crate::humminbird_parser::parse_file(path);
-            DetectResult {
-                format,
-                parse,
-                probe: placeholder_probe(path),
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let parse = crate::humminbird_parser::parse_file(path);
+                DetectResult {
+                    format,
+                    parse,
+                    probe: placeholder_probe(path),
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = path;
+                DetectResult {
+                    format,
+                    parse: ParseResult::empty_with_error("Humminbird parsing is native-only"),
+                    probe: FileProbe::placeholder(0),
+                }
             }
         }
 
         SonarFormat::XTF => {
-            let parse = crate::xtf_parser::parse_file(path);
-            DetectResult {
-                format,
-                parse,
-                probe: placeholder_probe(path),
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let parse = crate::xtf_parser::parse_file(path);
+                DetectResult {
+                    format,
+                    parse,
+                    probe: placeholder_probe(path),
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = path;
+                DetectResult {
+                    format,
+                    parse: ParseResult::empty_with_error("XTF parsing is native-only"),
+                    probe: FileProbe::placeholder(0),
+                }
             }
         }
 
         SonarFormat::JSF => {
-            let parse = crate::jsf_parser::parse_file(path);
-            DetectResult {
-                format,
-                parse,
-                probe: placeholder_probe(path),
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let parse = crate::jsf_parser::parse_file(path);
+                DetectResult {
+                    format,
+                    parse,
+                    probe: placeholder_probe(path),
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = path;
+                DetectResult {
+                    format,
+                    parse: ParseResult::empty_with_error("JSF parsing is native-only"),
+                    probe: FileProbe::placeholder(0),
+                }
             }
         }
 
         SonarFormat::Cerulean => {
-            let parse = crate::cerulean_parser::parse_file(path);
-            DetectResult {
-                format,
-                parse,
-                probe: placeholder_probe(path),
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let parse = crate::cerulean_parser::parse_file(path);
+                DetectResult {
+                    format,
+                    parse,
+                    probe: placeholder_probe(path),
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = path;
+                DetectResult {
+                    format,
+                    parse: ParseResult::empty_with_error("Cerulean parsing is native-only"),
+                    probe: FileProbe::placeholder(0),
+                }
             }
         }
 
@@ -249,4 +309,16 @@ fn placeholder_probe(path: &Path) -> FileProbe {
         preamble_channels: Vec::new(),
         summary: format!("{} bytes", file_size),
     }
+}
+
+/// WASM / browser entry point.  Sniffs magic bytes, then parses as Garmin
+/// RSD.  We only expose the Garmin path in the browser build — Lowrance,
+/// Humminbird, XTF, JSF, and Cerulean parsers stay native-only because
+/// they pull in mmap / native file IO that doesn't compile on wasm32.
+pub fn detect_and_parse_rsd_bytes(bytes: Vec<u8>) -> DetectResult {
+    let format = sniff_magic(&bytes);
+    let mut parser = GarminRSDParser::new();
+    let probe = parser.probe_bytes(bytes.clone(), None);
+    let parse = parser.parse_bytes(bytes, None);
+    DetectResult { format, parse, probe }
 }

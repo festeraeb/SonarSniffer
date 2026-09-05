@@ -32,6 +32,13 @@ wasm-pack build \
 if [[ -f "$ROOT/index.html" ]]; then
   cp "$ROOT/index.html" "$OUT/"
 fi
+# Copy the GUI assets the index.html references (app.js, styles.css)
+# so `python3 -m http.server -d dist/wasm` is a complete triple.
+for f in app.js styles.css; do
+  if [[ -f "$ROOT/$f" ]]; then
+    cp "$ROOT/$f" "$OUT/"
+  fi
+done
 
 echo ""
 echo "WASM artifacts: $OUT/pkg/"
